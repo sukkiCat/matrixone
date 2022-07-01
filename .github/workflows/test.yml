@@ -64,22 +64,11 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check MO-Server Status
+        if: ${{ always() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then echo 'kill mo-server'; pkill mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
 
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: '3'
-          path: ./base
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: BVT Ignore Tag Check
-        run: |
-          if  [ ! -d  "./base/test/"  ]; then echo 'first add, skip check'; exit 0; fi
-          head_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/head/test/cases | wc -l || 0)
-          base_tag_count=$(grep -r 'bvt:issue' $GITHUB_WORKSPACE/base/test/cases | wc -l || 0)
-          if [ $head_tag_count -gt $base_tag_count ]; then echo 'Tagging new case with bvt:issue is not permitted.'; exit 2; fi
-
+      
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
         continue-on-error: true
