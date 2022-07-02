@@ -1,5 +1,5 @@
 # Define workflow name.
-name: MatrixOne CI
+name: TimeZone Test
 
 # Controls when the workflow will run.
 on:
@@ -25,5 +25,3 @@ jobs:
           timedatectl status
 
 
-
-\
