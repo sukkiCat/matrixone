@@ -20,22 +20,26 @@ import (
 	"strconv"
 )
 
-//update statement
+// update statement
 type Update struct {
 	statementImpl
-	Table   TableExpr
+	Tables  TableExprs
 	Exprs   UpdateExprs
-	From    TableExprs
 	Where   *Where
 	OrderBy OrderBy
 	Limit   *Limit
+	With    *With
 }
 
 func (node *Update) Format(ctx *FmtCtx) {
-	ctx.WriteString("update")
-	if node.Table != nil {
+	if node.With != nil {
+		node.With.Format(ctx)
 		ctx.WriteByte(' ')
-		node.Table.Format(ctx)
+	}
+	ctx.WriteString("update")
+	if node.Tables != nil {
+		ctx.WriteByte(' ')
+		node.Tables.Format(ctx)
 	}
 	ctx.WriteString(" set")
 	if node.Exprs != nil {
@@ -56,17 +60,6 @@ func (node *Update) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewUpdate(t TableExpr, e UpdateExprs, f TableExprs, w *Where, o OrderBy, l *Limit) *Update {
-	return &Update{
-		Table:   t,
-		Exprs:   e,
-		From:    f,
-		Where:   w,
-		OrderBy: o,
-		Limit:   l,
-	}
-}
-
 type UpdateExprs []*UpdateExpr
 
 func (node *UpdateExprs) Format(ctx *FmtCtx) {
@@ -78,7 +71,7 @@ func (node *UpdateExprs) Format(ctx *FmtCtx) {
 	}
 }
 
-//the update expression.
+// the update expression.
 type UpdateExpr struct {
 	NodeFormatter
 	Tuple bool
@@ -105,7 +98,7 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 	}
 }
 
-//Load data statement
+// Load data statement
 type Load struct {
 	statementImpl
 	Local             bool
@@ -284,7 +277,7 @@ func NewLines(s string, t string) *Lines {
 	}
 }
 
-//column element in load data column list
+// column element in load data column list
 type LoadColumn interface {
 	NodeFormatter
 }

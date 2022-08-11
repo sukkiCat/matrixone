@@ -16,69 +16,99 @@ package compute
 
 import (
 	"bytes"
-	"math"
 
 	"github.com/RoaringBitmap/roaring"
+	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+
+	"golang.org/x/exp/constraints"
 )
 
-type deleteRange struct {
-	pos     uint32
-	deleted uint32
-}
+// unused
+// type deleteRange struct {
+// 	pos     uint32
+// 	deleted uint32
+// }
 
-func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
-	left, right := 0, len(ranges)-1
-	var mid int
-	for left <= right {
-		mid = (left + right) / 2
-		if ranges[mid].pos < pos {
-			left = mid + 1
-		} else if ranges[mid].pos > pos {
-			right = mid - 1
-		} else {
-			break
+// unused
+// func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
+// 	left, right := 0, len(ranges)-1
+// 	var mid int
+// 	for left <= right {
+// 		mid = (left + right) / 2
+// 		if ranges[mid].pos < pos {
+// 			left = mid + 1
+// 		} else if ranges[mid].pos > pos {
+// 			right = mid - 1
+// 		} else {
+// 			break
+// 		}
+// 	}
+// 	if mid == 0 && ranges[mid].pos < pos {
+// 		mid = mid + 1
+// 	}
+// 	// logutil.Infof("pos=%d, mid=%d, range.pos=%d,range.deleted=%d", pos, mid, ranges[mid].pos, ranges[mid].deleted)
+// 	return ranges[mid]
+// }
+
+func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deleteMask, deletes *roaring.Bitmap) (destMask *roaring.Bitmap, destVals map[uint32]any, destDelets *roaring.Bitmap) {
+	if deletes == nil || deletes.IsEmpty() {
+		return origMask, origVals, deleteMask
+	}
+	if origMask != nil && !origMask.IsEmpty() {
+		valIt := origMask.Iterator()
+		destMask = roaring.New()
+		destVals = make(map[uint32]any)
+		deleteIt := deletes.Iterator()
+		deleteCnt := uint32(0)
+		for deleteIt.HasNext() {
+			del := deleteIt.Next()
+			for valIt.HasNext() {
+				row := valIt.PeekNext()
+				if row < del {
+					destMask.Add(row - deleteCnt)
+					destVals[row-deleteCnt] = origVals[row]
+					valIt.Next()
+				} else if row == del {
+					valIt.Next()
+				} else {
+					break
+				}
+			}
+			deleteCnt++
+		}
+		for valIt.HasNext() {
+			row := valIt.Next()
+			destMask.Add(row - deleteCnt)
+			destVals[row-deleteCnt] = origVals[row]
 		}
 	}
-	if mid == 0 && ranges[mid].pos < pos {
-		mid = mid + 1
+	if deleteMask != nil && !deleteMask.IsEmpty() {
+		delIt := deleteMask.Iterator()
+		destDelets = roaring.New()
+		deleteIt := deletes.Iterator()
+		deleteCnt := uint32(0)
+		for deleteIt.HasNext() {
+			del := deleteIt.Next()
+			for delIt.HasNext() {
+				row := delIt.PeekNext()
+				if row < del {
+					destDelets.Add(row - deleteCnt)
+					delIt.Next()
+				} else if row == del {
+					delIt.Next()
+				} else {
+					break
+				}
+			}
+			deleteCnt++
+		}
+		for delIt.HasNext() {
+			row := delIt.Next()
+			destDelets.Add(row - deleteCnt)
+		}
 	}
-	// logutil.Infof("pos=%d, mid=%d, range.pos=%d,range.deleted=%d", pos, mid, ranges[mid].pos, ranges[mid].deleted)
-	return ranges[mid]
-}
-
-func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes *roaring.Bitmap) (*roaring.Bitmap, map[uint32]any, *roaring.Bitmap) {
-	if deletes == nil {
-		return origMask, origVals, deletes
-	}
-	destDelets := roaring.New()
-	ranges := make([]*deleteRange, 0, 10)
-	deletesIt := deletes.Iterator()
-	deletedCnt := uint32(0)
-	for deletesIt.HasNext() {
-		pos := deletesIt.Next()
-		destDelets.Add(pos - deletedCnt)
-		ranges = append(ranges, &deleteRange{pos: pos, deleted: deletedCnt})
-		deletedCnt++
-	}
-	if origMask == nil || origMask.IsEmpty() {
-		return origMask, origVals, destDelets
-	}
-
-	ranges = append(ranges, &deleteRange{pos: math.MaxUint32, deleted: deletedCnt})
-	destMask := roaring.New()
-	destVals := make(map[uint32]any)
-	origIt := origMask.Iterator()
-	for origIt.HasNext() {
-		pos := origIt.Next()
-		drange := findDeleteRange(pos, ranges)
-		destMask.Add(pos - drange.deleted)
-		destVals[pos-drange.deleted] = origVals[pos]
-	}
-	// for i, r := range ranges {
-	// 	logutil.Infof("%d range.pos=%d,range.deleted=%d", i, r.pos, r.deleted)
-	// }
 	return destMask, destVals, destDelets
 }
 
@@ -144,7 +174,7 @@ func EstimateSize(bat *containers.Batch, offset, length uint32) uint64 {
 func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
 	switch data.GetType().Oid {
 	case types.Type_BOOL:
-		return GetOffsetWithFunc[bool](data.Slice().([]bool), v.(bool), CompareBool, skipmask)
+		return GetOffsetWithFunc(data.Slice().([]bool), v.(bool), CompareBool, skipmask)
 	case types.Type_INT8:
 		return GetOffsetOfOrdered[int8](data.Slice(), v, skipmask)
 	case types.Type_INT16:
@@ -172,14 +202,18 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 	case types.Type_TIMESTAMP:
 		return GetOffsetOfOrdered[types.Timestamp](data.Slice(), v, skipmask)
 	case types.Type_DECIMAL64:
-		return GetOffsetOfOrdered[types.Decimal64](data.Slice(), v, skipmask)
+		return GetOffsetWithFunc(
+			data.Slice().([]types.Decimal64),
+			v.(types.Decimal64),
+			wtf.CompareDecimal64Decimal64Aligned,
+			skipmask)
 	case types.Type_DECIMAL128:
-		return GetOffsetWithFunc[types.Decimal128](
+		return GetOffsetWithFunc(
 			data.Slice().([]types.Decimal128),
 			v.(types.Decimal128),
-			types.CompareDecimal128Decimal128Aligned,
+			wtf.CompareDecimal128Decimal128Aligned,
 			skipmask)
-	case types.Type_CHAR, types.Type_VARCHAR:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB, types.Type_JSON:
 		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
 		start, end := 0, data.Length()-1
@@ -204,4 +238,36 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 	default:
 		panic("unsupported type")
 	}
+}
+
+func BinarySearchTs(a []types.TS, x types.TS) int {
+	start, mid, end := 0, 0, len(a)-1
+	for start <= end {
+		mid = (start + end) >> 1
+		switch {
+		case a[mid].Greater(x):
+			end = mid - 1
+		case a[mid].Less(x):
+			start = mid + 1
+		default:
+			return mid
+		}
+	}
+	return -1
+}
+
+func BinarySearch[T constraints.Ordered](a []T, x T) int {
+	start, mid, end := 0, 0, len(a)-1
+	for start <= end {
+		mid = (start + end) >> 1
+		switch {
+		case a[mid] > x:
+			end = mid - 1
+		case a[mid] < x:
+			start = mid + 1
+		default:
+			return mid
+		}
+	}
+	return -1
 }

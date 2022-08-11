@@ -21,39 +21,30 @@ import (
 )
 
 const (
-	running = iota
-	end
+	Build = iota
+	Eval
+	End
 )
 
 type container struct {
-	// state signs the statement of mergeTop operator
-	//	1. if state is running, operator still range the mergeReceivers to do merge-sort.
-	//	2. if state is end, operator has done and should push data to next operator.
-	state uint8
+	n     int // result vector number
+	state int
+	sels  []int64
+	poses []int32           // sorted list of attributes
+	cmps  []compare.Compare // compare structure used to do sort work
 
-	n     int      // len(attr)
-	attrs []string // sorted list of attributes
-	ds    []bool   // Directions, ds[i] == true: the attrs[i] are in descending order
-
-	cmps []compare.Compare // compare structure used to do sort work
-	sels []int64
-
-	// bat stores the final result of merge-top
-	bat *batch.Batch
+	bat *batch.Batch // bat stores the final result of merge-top
 }
 
 type Argument struct {
-	// Fields store the order information
-	Fields []top.Field
-	// Limit store the number of mergeTop-operator
-	Limit int64
-	// ctr stores the attributes needn't do Serialization work
-	ctr container
+	Fs    []top.Field // Fs store the order information
+	Limit int64       // Limit store the number of mergeTop-operator
+	ctr   *container  // ctr stores the attributes needn't do Serialization work
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {
-	for k := 0; k < ctr.n; k++ {
-		if r := ctr.cmps[k].Compare(vi, vj, i, j); r != 0 {
+	for _, pos := range ctr.poses {
+		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r
 		}
 	}

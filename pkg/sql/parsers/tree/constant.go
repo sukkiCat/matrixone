@@ -19,7 +19,7 @@ import (
 	"strings"
 )
 
-//the AST for literals like string,numeric,bool and etc.
+// the AST for literals like string,numeric,bool and etc.
 type Constant interface {
 	Expr
 }
@@ -39,7 +39,7 @@ const (
 	P_bit
 )
 
-//the AST for the constant numeric value.
+// the AST for the constant numeric value.
 type NumVal struct {
 	Constant
 	Value constant.Value
@@ -56,17 +56,49 @@ type NumVal struct {
 	ValType  P_TYPE
 }
 
-func (node *NumVal) Format(ctx *FmtCtx) {
-	if node.origString != "" {
-		ctx.WriteString(node.origString)
+func (n *NumVal) Format(ctx *FmtCtx) {
+	if n.origString != "" {
+		ctx.WriteString(FormatString(n.origString))
 		return
 	}
-	switch node.Value.Kind() {
+	switch n.Value.Kind() {
 	case constant.Bool:
-		ctx.WriteString(strings.ToLower(node.Value.String()))
+		ctx.WriteString(strings.ToLower(n.Value.String()))
 	case constant.Unknown:
 		ctx.WriteString("null")
 	}
+}
+
+func FormatString(str string) string {
+	var buffer strings.Builder
+	for i, ch := range str {
+		if ch == '\n' {
+			buffer.WriteString("\\n")
+		} else if ch == '\x00' {
+			buffer.WriteString("\\0")
+		} else if ch == '\r' {
+			buffer.WriteString("\\r")
+		} else if ch == '\\' {
+			if (i + 1) < len(str) {
+				if str[i+1] == '_' || str[i+1] == '%' {
+					buffer.WriteByte('\\')
+					continue
+				}
+			}
+			buffer.WriteString("\\\\")
+		} else if ch == 8 {
+			buffer.WriteString("\\b")
+		} else if ch == 26 {
+			buffer.WriteString("\\Z")
+		} else if ch == '\t' {
+			buffer.WriteString("\\t")
+		} else {
+			// buffer.WriteByte(byte(ch))
+			buffer.WriteRune(ch)
+		}
+	}
+	res := buffer.String()
+	return res
 }
 
 func (n *NumVal) String() string {

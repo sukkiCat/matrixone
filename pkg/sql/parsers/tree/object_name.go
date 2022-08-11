@@ -16,12 +16,12 @@ package tree
 
 import "fmt"
 
-//the common interface for qualified object names
+// the common interface for qualified object names
 type ObjectName interface {
 	NodeFormatter
 }
 
-//the internal type for a qualified object.
+// the internal type for a qualified object.
 type objName struct {
 	//the path to the object.
 	ObjectNamePrefix
@@ -30,7 +30,7 @@ type objName struct {
 	ObjectName Identifier
 }
 
-//the path prefix of an object name.
+// the path prefix of an object name.
 type ObjectNamePrefix struct {
 	CatalogName Identifier
 	SchemaName  Identifier
@@ -41,7 +41,7 @@ type ObjectNamePrefix struct {
 	ExplicitSchema bool
 }
 
-//the unresolved qualified name for a database object (table, view, etc)
+// the unresolved qualified name for a database object (table, view, etc)
 type UnresolvedObjectName struct {
 	//the number of name parts; >= 1
 	NumParts int
@@ -53,30 +53,30 @@ type UnresolvedObjectName struct {
 
 func (node *UnresolvedObjectName) Format(ctx *FmtCtx) {
 	prefix := ""
-	for i := 0; i < node.NumParts; i++ {
+	for i := node.NumParts - 1; i >= 0; i-- {
 		ctx.WriteString(prefix)
 		ctx.WriteString(node.Parts[i])
 		prefix = "."
 	}
 }
 
-func (u *UnresolvedObjectName) ToTableName() TableName {
+func (node *UnresolvedObjectName) ToTableName() TableName {
 	return TableName{
 		objName: objName{
 			ObjectNamePrefix: ObjectNamePrefix{
-				SchemaName:      Identifier(u.Parts[1]),
-				CatalogName:     Identifier(u.Parts[2]),
-				ExplicitSchema:  u.NumParts >= 2,
-				ExplicitCatalog: u.NumParts >= 3,
+				SchemaName:      Identifier(node.Parts[1]),
+				CatalogName:     Identifier(node.Parts[2]),
+				ExplicitSchema:  node.NumParts >= 2,
+				ExplicitCatalog: node.NumParts >= 3,
 			},
-			ObjectName: Identifier(u.Parts[0]),
+			ObjectName: Identifier(node.Parts[0]),
 		},
 	}
 }
 
 func NewUnresolvedObjectName(num int, parts [3]string) (*UnresolvedObjectName, error) {
 	if num < 1 || num > 3 {
-		return nil, fmt.Errorf("invalid number of parts.")
+		return nil, fmt.Errorf("invalid number of parts")
 	}
 	return &UnresolvedObjectName{
 		NumParts: num,

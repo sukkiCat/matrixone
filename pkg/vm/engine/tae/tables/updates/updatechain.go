@@ -15,6 +15,7 @@
 package updates
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 
@@ -164,25 +165,25 @@ func (chain *ColumnChain) StringLocked() string {
 	return chain.view.StringLocked()
 }
 
-func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v any, err error) {
+func (chain *ColumnChain) GetValueLocked(row uint32, ts types.TS) (v any, err error) {
 	return chain.view.GetValue(row, ts)
 }
 
-func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]any, error) {
+func (chain *ColumnChain) CollectUpdatesLocked(ts types.TS) (*roaring.Bitmap, map[uint32]any, error) {
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]any, indexes []*wal.Index, err error) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs types.TS) (mask *roaring.Bitmap, vals map[uint32]any, indexes []*wal.Index, err error) {
 	var merged *ColumnUpdateNode
 	chain.LoopChainLocked(func(n *ColumnUpdateNode) bool {
 		n.RLock()
 		// 1. Committed in [endTs, +inf)
-		if n.GetCommitTSLocked() >= endTs {
+		if n.GetCommitTSLocked().GreaterEq(endTs) {
 			n.RUnlock()
 			return true
 		}
 		// 2. Committed in (-inf, startTs). Skip it and stop looping
-		if n.GetCommitTSLocked() < startTs {
+		if n.GetCommitTSLocked().Less(startTs) {
 			n.RUnlock()
 			return false
 		}
@@ -194,10 +195,10 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			state := txn.GetTxnState(true)
 			// logutil.Infof("[%d, %d] -- wait --> %s: %d", startTs, endTs, txn.Repr(), state)
 			// 3.1.1. Rollbacked. Skip it and go to next
-			if state == txnif.TxnStateRollbacked {
+			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
 				return false
 			}
 			// 3.1.2. Committed

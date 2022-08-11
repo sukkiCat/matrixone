@@ -9,20 +9,11 @@
 ### **单表语法结构**
 
 ```
-UPDATE [LOW_PRIORITY] [IGNORE] table_reference
+UPDATE table_reference
     SET assignment_list
     [WHERE where_condition]
     [ORDER BY ...]
     [LIMIT row_count]
-
-value:
-    {expr | DEFAULT}
-
-assignment:
-    col_name = value
-
-assignment_list:
-    assignment [, assignment] ...
 ```
 
 #### 参数释义

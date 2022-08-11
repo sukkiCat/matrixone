@@ -16,11 +16,11 @@ package mockio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,9 +30,8 @@ func TestBlock1(t *testing.T) {
 	for col := 0; col < colCnt; col++ {
 		indexCnt[col] = 2
 	}
-	var block file.Block
-	block = newBlock(common.NextGlobalSeqNum(), nil, colCnt, indexCnt)
-	blockTs := common.NextGlobalSeqNum()
+	block := newBlock(common.NextGlobalSeqNum(), nil, colCnt, indexCnt)
+	blockTs := types.NextGlobalTsForTest()
 	_ = block.WriteTS(blockTs)
 	readTs, _ := block.ReadTS()
 	assert.Equal(t, blockTs, readTs)

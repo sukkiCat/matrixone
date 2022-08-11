@@ -29,13 +29,20 @@ type IDAllocator interface {
 }
 
 // Checker is the interface suppose to be implemented by HAKeeper's
-// coordinator. Checker is suppose to be stateless - Checker is free to
+// coordinator. Checker is supposed to be stateless - Checker is free to
 // maintain whatever internal states, but those states should never be
 // assumed to be persistent across reboots.
 type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
-		dn pb.DNState, log pb.LogState, currentTick uint64) []pb.ScheduleCommand
+	Check(alloc util.IDAllocator, cluster pb.ClusterInfo, dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand
+}
+
+// BootstrapManager is the interface suppose to be implemented by HAKeeper's
+// bootstrap manager.
+type BootstrapManager interface {
+	Bootstrap(util.IDAllocator, pb.DNState, pb.LogState) ([]pb.ScheduleCommand, error)
+
+	CheckBootstrap(pb.LogState) bool
 }

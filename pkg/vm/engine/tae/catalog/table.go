@@ -15,7 +15,9 @@
 package catalog
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -68,7 +70,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 			},
 			RWMutex:  new(sync.RWMutex),
 			ID:       id,
-			CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		db:      db,
 		schema:  schema,
@@ -195,25 +197,19 @@ func (entry *TableEntry) GetDB() *DBEntry {
 }
 
 func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
 	if level == common.PPL0 {
-		return s
+		return w.String()
 	}
-	var body string
 	it := entry.MakeSegmentIt(true)
 	for it.Valid() {
 		segment := it.Get().GetPayload().(*SegmentEntry)
-		if len(body) == 0 {
-			body = segment.PPString(level, depth+1, prefix)
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, segment.PPString(level, depth+1, prefix))
-		}
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(segment.PPString(level, depth+1, prefix))
 		it.Next()
 	}
-	if len(body) == 0 {
-		return s
-	}
-	return fmt.Sprintf("%s\n%s", s, body)
+	return w.String()
 }
 
 func (entry *TableEntry) String() string {
@@ -312,7 +308,9 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetDB().RemoveEntry(entry)
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return
@@ -369,7 +367,19 @@ func (entry *TableEntry) CloneCreate() CheckpointItem {
 	return cloned
 }
 
-// Coarse API: no consistency check
+// CloneCreateEntry is for collect commands
+func (entry *TableEntry) CloneCreateEntry() *TableEntry {
+	cloned := &TableEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		schema:    entry.schema,
+		db:        entry.db,
+	}
+	cloned.CurrOp = OpCreate
+	cloned.RWMutex = &sync.RWMutex{}
+	return cloned
+}
+
+// IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
 	if !db.IsActive() {

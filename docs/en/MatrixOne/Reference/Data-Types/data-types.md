@@ -1,6 +1,6 @@
 # **Data Types Overview**
 
-MatrixOne Data types conforms with MySQL Data types definition. 
+MatrixOne Data types conforms with MySQL Data types definition.
 
 Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 
@@ -35,7 +35,15 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 |  Data Type   | Size  | Resolution |  Min Value   | Max Value  | Precision |
 |  ----  | ----  |   ----  |  ----  | ----  |   ----  |
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD/YYYYMMDD |
-| DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
+| DateTime  | 8 byte | second | 0001-01-01 00:00:00.000000  | 9999-12-31 23:59:59.999999 | YYYY-MM-DD hh:mi:ssssss |
+| TIMESTAMP|8 byte|second|1970-01-01 00:00:01.000000|2038-01-19 03:14:07.999999|YYYYMMDD hh:mi:ss.ssssss|
+
+## **Bool**
+
+|  Data Type   | Size  |
+|  ----  | ----  |
+| True  | 1 byte |
+|False|1 byte|
 
 ## **Decimal Types(Beta)**
 
@@ -74,13 +82,13 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 //Create a table named "names" with 2 attributes of a "varchar" and a "char"
 > create table names(name varchar(255),age char(255));
 
-//Insert a data of "varchar" and "char" into table "names" 
+//Insert a data of "varchar" and "char" into table "names"
 > insert into names(name, age) values('Abby', '24');
 
 //Create a table named "calendar" with 2 attributes of a "date" and a "datetime"
 > create table calendar(a date, b datetime);
 
-//Insert a data of "date" and "datetime" into table "calendar" 
+//Insert a data of "date" and "datetime" into table "calendar"
 > insert into calendar(a, b) values('20220202, '2022-02-02 00:10:30');
 > insert into calendar(a, b) values('2022-02-02, '2022-02-02 00:10:30');
 
@@ -94,4 +102,31 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | 123.456 | 123456.123456789141124135 |
 +---------+---------------------------+
 
+//Create a table named "booltest" with 2 attribute of a "boolean" and b "bool"
+> create table booltest (a boolean,b bool);
+> insert into booltest values (0,1),(true,false),(true,1),(0,false),(NULL,NULL);
+> select * from booltest;
++-------+-------+
+| a     | b     |
++-------+-------+
+| false | true  |
+| true  | false |
+| true  | true  |
+| false | false |
+| NULL  | NULL  |
++-------+-------+
+5 rows in set (0.00 sec)
+
+//Create a table named "timestamptest" with 1 attribute of a "timestamp"
+> create table timestamptest (a timestamp(0) not null, primary key(a));
+> insert into timestamptest values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+> select * from timestamptest;
++---------------------+
+| a                   |
++---------------------+
+| 2020-01-01 00:00:00 |
+| 2022-01-02 00:00:00 |
+| 2022-01-02 00:00:01 |
+| 2022-01-02 00:00:02 |
++---------------------+
 ```

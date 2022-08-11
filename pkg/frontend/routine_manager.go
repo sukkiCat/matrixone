@@ -24,17 +24,22 @@ import (
 )
 
 type RoutineManager struct {
-	rwlock  sync.RWMutex
-	clients map[goetty.IOSession]*Routine
-
-	//epoch gc handler
-	pdHook *PDCallbackImpl
-
-	pu *config.ParameterUnit
+	rwlock        sync.RWMutex
+	clients       map[goetty.IOSession]*Routine
+	pu            *config.ParameterUnit
+	skipCheckUser bool
 }
 
-func (rm *RoutineManager) getEpochgc() *PDCallbackImpl {
-	return rm.pdHook
+func (rm *RoutineManager) SetSkipCheckUser(b bool) {
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
+	rm.skipCheckUser = b
+}
+
+func (rm *RoutineManager) GetSkipCheckUser() bool {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	return rm.skipCheckUser
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
@@ -43,11 +48,15 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()), rm.pu.SV)
+	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 
 	routine := NewRoutine(pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
+	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+	routine.SetSession(ses)
+	pro.SetSession(ses)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -99,13 +108,6 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
-	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
-		if !rm.pdHook.CanAcceptSomething() {
-			logutil.Errorf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")
-			return errors.New("The Heartbeat From PDLeader Is Timeout. The Server Reject Connection.\n")
-		}
-	}
-
 	rm.rwlock.RLock()
 	routine, ok := rm.clients[rs]
 	rm.rwlock.RUnlock()
@@ -116,8 +118,11 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol := routine.protocol.(*MysqlProtocolImpl)
 
 	packet, ok := msg.(*Packet)
+
+	protocol.m.Lock()
 	protocol.sequenceId = uint8(packet.SequenceID + 1)
 	var seq = protocol.sequenceId
+	protocol.m.Unlock()
 	if !ok {
 		return errors.New("message is not Packet")
 	}
@@ -166,12 +171,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *RoutineManager {
+func NewRoutineManager(pu *config.ParameterUnit) *RoutineManager {
 	rm := &RoutineManager{
 		clients: make(map[goetty.IOSession]*Routine),
-
-		pdHook: pdHook,
-		pu:     pu,
+		pu:      pu,
 	}
 	return rm
 }

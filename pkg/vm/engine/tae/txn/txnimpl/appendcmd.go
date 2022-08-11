@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,7 +40,7 @@ type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
 	*txnbase.ComposedCmd
 	Infos []*appendInfo
-	Ts    uint64
+	Ts    types.TS
 	Node  InsertNode
 }
 
@@ -84,8 +85,8 @@ func (c *AppendCmd) VerboseString() string {
 	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToVerboseString("\t\t"))
 	return s
 }
-func (e *AppendCmd) Close()         {}
-func (e *AppendCmd) GetType() int16 { return CmdAppend }
+func (c *AppendCmd) Close()         {}
+func (c *AppendCmd) GetType() int16 { return CmdAppend }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
 		return

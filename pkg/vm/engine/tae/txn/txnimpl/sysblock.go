@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package txnimpl
 
 import (
@@ -7,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -27,6 +42,14 @@ func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	return blk
 }
 
+func bool2i8(v bool) int8 {
+	if v {
+		return int8(1)
+	} else {
+		return int8(1)
+	}
+}
+
 func (blk *txnSysBlock) isSysTable() bool {
 	return sysTableNames[blk.table.entry.GetSchema().Name]
 }
@@ -45,11 +68,11 @@ func (blk *txnSysBlock) BatchDedup(pks containers.Vector, invisibility *roaring.
 	return blk.txnBlock.BatchDedup(pks, invisibility)
 }
 
-func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
+func (blk *txnSysBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}
-	return blk.txnBlock.RangeDelete(start, end)
+	return blk.txnBlock.RangeDelete(start, end, dt)
 }
 
 func (blk *txnSysBlock) Update(row uint32, col uint16, v any) (err error) {
@@ -185,7 +208,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_Length:
 				colData.Append(int32(colDef.Type.Width))
 			case catalog.SystemColAttr_NullAbility:
-				colData.Append(colDef.NullAbility) // TODO
+				colData.Append(bool2i8(colDef.NullAbility)) // TODO
 			case catalog.SystemColAttr_HasExpr:
 				colData.Append(int8(0)) // TODO
 			case catalog.SystemColAttr_DefaultExpr:
@@ -193,7 +216,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_IsDropped:
 				colData.Append(int8(0)) // TODO
 			case catalog.SystemColAttr_IsHidden:
-				colData.Append(colDef.Hidden) // TODO
+				colData.Append(bool2i8(colDef.Hidden))
 			case catalog.SystemColAttr_IsUnsigned:
 				v := int8(0)
 				switch colDef.Type.Oid {
@@ -202,7 +225,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 				}
 				colData.Append(v) // TODO
 			case catalog.SystemColAttr_IsAutoIncrement:
-				colData.Append(colDef.AutoIncrement) // TODO
+				colData.Append(bool2i8(colDef.AutoIncrement)) // TODO
 			case catalog.SystemColAttr_Comment:
 				colData.Append([]byte(colDef.Comment)) // TODO
 			default:

@@ -53,6 +53,7 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
+	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
 	routine := NewRoutine(pro, exe, tRM.pu)
 
@@ -271,12 +272,10 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, nil)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
-	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
-	pci := NewPDCallbackImpl(ppu)
-	pci.Id = 0
-	rm := NewRoutineManager(pu, pci)
+	rm := NewRoutineManager(pu)
+	rm.SetSkipCheckUser(true)
 
 	encoder, decoder := NewSqlCodec()
 
@@ -891,7 +890,7 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset will be morethan 16MB
+// the size of resultset will be morethan 16MB
 func makeMoreThan16MBResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
 }
@@ -948,7 +947,7 @@ func make16MBRowResultSet() *MysqlResultSet {
 	return rs
 }
 
-//the size of resultset row will be more than 16MB
+// the size of resultset row will be more than 16MB
 func make16MBRowResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
 }
@@ -1205,7 +1204,7 @@ func TestMysqlResultSet(t *testing.T) {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, nil)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
 
 	encoder, decoder := NewSqlCodec()
 	trm := NewTestRoutineManager(pu)
@@ -2003,10 +2002,11 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 
 		var IO IOPackageImpl
-		var SV *config.SystemVariables = &config.SystemVariables{}
+		var SV = &config.SystemVariables{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
 		err := mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -2033,21 +2033,22 @@ func Test_handleHandshake_Recover(t *testing.T) {
 
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
-		var SV *config.SystemVariables = &config.SystemVariables{}
+		var SV = &config.SystemVariables{}
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
+		mp.SetSkipCheckUser(true)
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
-			mp.handleHandshake(payload)
+			_ = mp.handleHandshake(payload)
 			maxLen = Max(maxLen, len(payload))
 		}
 		maxLen = 0
 		var payload2 string
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload2)
-			mp.handleHandshake([]byte(payload2))
+			_ = mp.handleHandshake([]byte(payload2))
 			maxLen = Max(maxLen, len(payload2))
 		}
 	})

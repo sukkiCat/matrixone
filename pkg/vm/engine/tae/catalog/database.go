@@ -15,8 +15,10 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -66,9 +68,10 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 			CommitInfo: CommitInfo{
 				CurrOp: OpCreate,
 			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: 1,
+			RWMutex: new(sync.RWMutex),
+			ID:      id,
+			//CreateAt: 1,
+			CreateAt: types.SystemDBTS,
 		},
 		catalog:   catalog,
 		name:      SystemDBName,
@@ -121,26 +124,19 @@ func (e *DBEntry) MakeTableIt(reverse bool) *common.LinkIt {
 }
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.String()))
 	if level == common.PPL0 {
-		return s
+		return w.String()
 	}
-	var body string
 	it := e.MakeTableIt(true)
 	for it.Valid() {
 		table := it.Get().GetPayload().(*TableEntry)
-		if len(body) == 0 {
-			body = table.PPString(level, depth+1, "")
-		} else {
-			body = fmt.Sprintf("%s\n%s", body, table.PPString(level, depth+1, ""))
-		}
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(table.PPString(level, depth+1, ""))
 		it.Next()
 	}
-
-	if len(body) == 0 {
-		return s
-	}
-	return fmt.Sprintf("%s\n%s", s, body)
+	return w.String()
 }
 
 func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
@@ -323,7 +319,9 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	currOp := e.CurrOp
 	e.RUnlock()
 	if currOp == OpCreate {
-		err = e.catalog.RemoveEntry(e)
+		if err = e.catalog.RemoveEntry(e); err != nil {
+			return
+		}
 	}
 	if err = e.BaseEntry.PrepareRollback(); err != nil {
 		return
@@ -331,21 +329,21 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
+func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = e.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint16(len(entry.name))); err != nil {
+	if err = binary.Write(w, binary.BigEndian, uint16(len(e.name))); err != nil {
 		return
 	}
 	var sn int
-	sn, err = w.Write([]byte(entry.name))
+	sn, err = w.Write([]byte(e.name))
 	n += int64(sn) + 2
 	return
 }
 
-func (entry *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = e.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
 	size := uint16(0)
@@ -358,34 +356,44 @@ func (entry *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(size)
-	entry.name = string(buf)
+	e.name = string(buf)
 	return
 }
 
-func (entry *DBEntry) MakeLogEntry() *EntryCommand {
-	return newDBCmd(0, CmdLogDatabase, entry)
+func (e *DBEntry) MakeLogEntry() *EntryCommand {
+	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (entry *DBEntry) Clone() CheckpointItem {
+func (e *DBEntry) Clone() CheckpointItem {
 	cloned := &DBEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		name:      entry.name,
+		BaseEntry: e.BaseEntry.Clone(),
+		name:      e.name,
 	}
 	return cloned
 }
 
-func (entry *DBEntry) CloneCreate() CheckpointItem {
+func (e *DBEntry) CloneCreate() CheckpointItem {
 	cloned := &DBEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		name:      entry.name,
+		BaseEntry: e.BaseEntry.CloneCreate(),
+		name:      e.name,
 	}
 	return cloned
 }
 
-// Coarse API: no consistency check
-func (entry *DBEntry) IsActive() bool {
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
+func (e *DBEntry) CloneCreateEntry() *DBEntry {
+	cloned := &DBEntry{
+		BaseEntry: e.BaseEntry.Clone(),
+		name:      e.name,
+	}
+	cloned.RWMutex = &sync.RWMutex{}
+	cloned.CurrOp = OpCreate
+	return cloned
+}
+
+// IsActive is coarse API: no consistency check
+func (e *DBEntry) IsActive() bool {
+	e.RLock()
+	dropped := e.IsDroppedCommitted()
+	e.RUnlock()
 	return !dropped
 }

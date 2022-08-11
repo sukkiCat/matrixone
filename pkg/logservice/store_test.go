@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +56,7 @@ func TestRaftConfig(t *testing.T) {
 
 func getStoreTestConfig() Config {
 	cfg := Config{
+		UUID:                uuid.New().String(),
 		RTTMillisecond:      10,
 		GossipSeedAddresses: []string{"127.0.0.1:9000"},
 		DeploymentID:        1,
@@ -70,21 +72,25 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	store, err := newLogStore(cfg)
 	assert.NoError(t, err)
+	plog.Infof("1")
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
+	plog.Infof("2")
 }
 
-func getTestStore(cfg Config) (*store, error) {
+func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
 	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
 	}
-	peers := make(map[uint64]dragonboat.Target)
-	peers[2] = store.nh.ID()
-	if err := store.StartReplica(1, 2, peers, false); err != nil {
-		store.Close()
-		return nil, err
+	if startLogReplica {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[2] = store.nh.ID()
+		if err := store.startReplica(1, 2, peers, false); err != nil {
+			store.close()
+			return nil, err
+		}
 	}
 	return store, nil
 }
@@ -97,9 +103,9 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
-	assert.NoError(t, store.StartHAKeeperReplica(2, peers, false))
+	assert.NoError(t, store.startHAKeeperReplica(2, peers, false))
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	mustHaveReplica(t, store, hakeeper.DefaultHAKeeperShardID, 2)
 }
@@ -108,10 +114,10 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	mustHaveReplica(t, store, 1, 2)
 }
@@ -120,13 +126,13 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	mustHaveReplica(t, store, 1, 2)
-	store.stopReplica(1, 2)
+	require.NoError(t, store.stopReplica(1, 2))
 	assert.False(t, hasReplica(store, 1, 2))
 }
 
@@ -134,17 +140,17 @@ func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg)
+	store, err := getTestStore(cfg, true)
 	assert.NoError(t, err)
 	defer func() {
-		assert.NoError(t, store.Close())
+		assert.NoError(t, store.close())
 	}()
 	fn(t, store)
 }
 
 func getTestUserEntry() []byte {
-	cmd := make([]byte, 2+8+8)
-	binaryEnc.PutUint16(cmd, userEntryTag)
+	cmd := make([]byte, headerSize+8+8)
+	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], 100)
 	binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
 	return cmd
@@ -154,7 +160,7 @@ func TestGetOrExtendLease(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 	}
 	runStoreTest(t, fn)
 }
@@ -163,9 +169,9 @@ func TestAppendLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
-		lsn, err := store.Append(ctx, 1, cmd)
+		lsn, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 	}
@@ -176,13 +182,27 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
-		cmd := make([]byte, 2+8+8)
-		binaryEnc.PutUint16(cmd, userEntryTag)
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
+		cmd := make([]byte, headerSize+8+8)
+		binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 		binaryEnc.PutUint64(cmd[headerSize:], 101)
 		binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
-		_, err := store.Append(ctx, 1, cmd)
+		_, err := store.append(ctx, 1, cmd)
 		assert.True(t, errors.Is(err, ErrNotLeaseHolder))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestStoreTsoUpdate(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		v1, err := store.tsoUpdate(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), v1)
+		v2, err := store.tsoUpdate(ctx, 1000)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(101), v2)
 	}
 	runStoreTest(t, fn)
 }
@@ -191,13 +211,13 @@ func TestTruncateLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
-		_, err := store.Append(ctx, 1, cmd)
+		_, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
-		assert.NoError(t, store.TruncateLog(ctx, 1, 4))
-		err = store.TruncateLog(ctx, 1, 3)
-		assert.True(t, errors.Is(err, ErrInvalidTruncateIndex))
+		assert.NoError(t, store.truncateLog(ctx, 1, 4))
+		err = store.truncateLog(ctx, 1, 3)
+		assert.True(t, errors.Is(err, ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
 }
@@ -206,15 +226,15 @@ func TestGetTruncatedIndex(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		index, err := store.GetTruncatedIndex(ctx, 1)
+		index, err := store.getTruncatedLsn(ctx, 1)
 		assert.Equal(t, uint64(0), index)
 		assert.NoError(t, err)
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
-		_, err = store.Append(ctx, 1, cmd)
+		_, err = store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
-		assert.NoError(t, store.TruncateLog(ctx, 1, 4))
-		index, err = store.GetTruncatedIndex(ctx, 1)
+		assert.NoError(t, store.truncateLog(ctx, 1, 4))
+		index, err = store.getTruncatedLsn(ctx, 1)
 		assert.Equal(t, uint64(4), index)
 		assert.NoError(t, err)
 	}
@@ -225,17 +245,17 @@ func TestQueryLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
-		_, err := store.Append(ctx, 1, cmd)
+		_, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
-		entries, lsn, err := store.QueryLog(ctx, 1, 4, math.MaxUint64)
+		entries, lsn, err := store.queryLog(ctx, 1, 4, math.MaxUint64)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(4), lsn)
 		assert.Equal(t, entries[0].Data, cmd)
 		// lease holder ID update cmd at entry index 3
-		entries, lsn, err = store.QueryLog(ctx, 1, 3, math.MaxUint64)
+		entries, lsn, err = store.queryLog(ctx, 1, 3, math.MaxUint64)
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(entries))
 		assert.Equal(t, uint64(3), lsn)
@@ -244,15 +264,15 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, pb.UserRecord, entries[1].Type)
 
 		// size limited
-		_, err = store.Append(ctx, 1, cmd)
+		_, err = store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
-		entries, lsn, err = store.QueryLog(ctx, 1, 4, 1)
+		entries, lsn, err = store.queryLog(ctx, 1, 4, 1)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(5), lsn)
 		assert.Equal(t, entries[0].Data, cmd)
 		// more log available
-		entries, lsn, err = store.QueryLog(ctx, 1, 5, 1)
+		entries, lsn, err = store.queryLog(ctx, 1, 5, 1)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(5), lsn)
@@ -264,9 +284,52 @@ func TestQueryLog(t *testing.T) {
 func TestHAKeeperTick(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
-		peers[1] = store.ID()
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 		store.hakeeperTick()
+	}
+	runStoreTest(t, fn)
+}
+
+func TestAddScheduleCommands(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		sc1 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 1,
+				},
+			},
+		}
+		sc2 := pb.ScheduleCommand{
+			UUID: "uuid2",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 2,
+				},
+			},
+		}
+		sc3 := pb.ScheduleCommand{
+			UUID: "uuid1",
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID: 3,
+				},
+			},
+		}
+		require.NoError(t,
+			store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+		cb, err := store.getCommandBatch(ctx, "uuid1")
+		require.NoError(t, err)
+		assert.Equal(t, []pb.ScheduleCommand{sc1, sc3}, cb.Commands)
+		cb, err = store.getCommandBatch(ctx, "uuid2")
+		require.NoError(t, err)
+		assert.Equal(t, []pb.ScheduleCommand{sc2}, cb.Commands)
 	}
 	runStoreTest(t, fn)
 }
@@ -274,13 +337,19 @@ func TestHAKeeperTick(t *testing.T) {
 func TestGetHeartbeatMessage(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
-		peers[1] = store.ID()
-		assert.NoError(t, store.StartReplica(10, 1, peers, false))
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+		peers[1] = store.id()
+		assert.NoError(t, store.startReplica(10, 1, peers, false))
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 
-		m := store.getHeartbeatMessage()
-		// hakeeper shard is included
-		assert.Equal(t, 3, len(m.Replicas))
+		for i := 0; i < 5000; i++ {
+			m := store.getHeartbeatMessage()
+			if len(m.Replicas) != 3 {
+				time.Sleep(time.Millisecond)
+			} else {
+				return
+			}
+		}
+		t.Fatalf("failed to get all replicas details from heartbeat message")
 	}
 	runStoreTest(t, fn)
 }
@@ -288,20 +357,27 @@ func TestGetHeartbeatMessage(t *testing.T) {
 func TestAddHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
-		peers[1] = store.ID()
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+		_, err := store.addLogStoreHeartbeat(ctx, m)
+		assert.NoError(t, err)
+
+		cnMsg := pb.CNStoreHeartbeat{
+			UUID: store.id(),
+		}
+		assert.NoError(t, store.addCNStoreHeartbeat(ctx, cnMsg))
 
 		dnMsg := pb.DNStoreHeartbeat{
-			UUID:   store.ID(),
+			UUID:   store.id(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
 		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
-		assert.NoError(t, store.AddDNStoreHeartbeat(ctx, dnMsg))
+		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
+		assert.NoError(t, err)
 	}
 	runStoreTest(t, fn)
 }
@@ -371,25 +447,33 @@ func getTestStores() (*store, *store, error) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = store1.nh.ID()
 	peers1[2] = store2.nh.ID()
-	if err := store1.StartReplica(1, 1, peers1, false); err != nil {
+	if err := store1.startReplica(1, 1, peers1, false); err != nil {
 		return nil, nil, err
 	}
 	peers2 := make(map[uint64]dragonboat.Target)
 	peers2[1] = store1.nh.ID()
 	peers2[2] = store2.nh.ID()
-	if err := store2.StartReplica(1, 2, peers2, false); err != nil {
+	if err := store2.startReplica(1, 2, peers2, false); err != nil {
 		return nil, nil, err
 	}
 
-	for {
-		_, _, ok, err := store1.nh.GetLeaderID(1)
+	for i := 0; i <= 30000; i++ {
+		leaderID, _, ok, err := store1.nh.GetLeaderID(1)
 		if err != nil {
 			return nil, nil, err
 		}
-		if ok {
+		if ok && leaderID == 1 {
 			break
 		}
+		if ok && leaderID != 1 {
+			if err := store1.requestLeaderTransfer(1, 1); err != nil {
+				plog.Errorf("failed to transfer leader")
+			}
+		}
 		time.Sleep(time.Millisecond)
+		if i == 30000 {
+			panic("failed to have leader elected in 30 seconds")
+		}
 	}
 	return store1, store2, nil
 }
@@ -398,8 +482,8 @@ func TestRemoveReplica(t *testing.T) {
 	store1, store2, err := getTestStores()
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, store1.Close())
-		require.NoError(t, store2.Close())
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -413,6 +497,28 @@ func TestRemoveReplica(t *testing.T) {
 		require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
 		return
 	}
+}
+
+func TestStopReplicaCanResetHAKeeperReplicaID(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		assert.Equal(t, uint64(1), atomic.LoadUint64(&store.haKeeperReplicaID))
+		assert.NoError(t, store.stopReplica(hakeeper.DefaultHAKeeperShardID, 1))
+		assert.Equal(t, uint64(0), atomic.LoadUint64(&store.haKeeperReplicaID))
+	}
+	runStoreTest(t, fn)
+}
+
+func hasShard(s *store, shardID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {

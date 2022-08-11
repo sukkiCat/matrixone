@@ -18,9 +18,9 @@ import (
 	"reflect"
 	"testing"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func makeArgs(ss []string) *types.Bytes {
@@ -175,13 +175,13 @@ func Test_sliceLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sliceLikePure(tt.args.s, tt.args.expr, tt.args.rs)
+			got, err := sliceLikeScalar(tt.args.s, tt.args.expr, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("sliceLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("sliceLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("sliceLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("sliceLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -345,13 +345,13 @@ func Test_pureLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := pureLikePure(tt.args.p, tt.args.expr, tt.args.rs)
+			got, err := scalarLikeScalar(tt.args.p, tt.args.expr, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("pureLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("scalarLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("pureLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("scalarLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -361,7 +361,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 	type args struct {
 		s     *types.Bytes
 		expr  []byte
-		nulls *roaring.Bitmap
+		nulls *bitmap.Bitmap
 		rs    []int64
 	}
 	tests := []struct {
@@ -377,7 +377,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("%"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1},
 			wantErr: false,
@@ -389,7 +389,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("_"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0},
 			wantErr: false,
@@ -401,7 +401,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte(""),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{},
 			wantErr: false,
@@ -413,7 +413,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("bc"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -425,7 +425,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("_c"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -437,7 +437,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc"}),
 				expr:  []byte("%c"),
 				rs:    make([]int64, 2),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -449,7 +449,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("_c%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1, 2},
 			wantErr: false,
@@ -461,7 +461,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("%c_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{2},
 			wantErr: false,
@@ -473,7 +473,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("_c_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{2},
 			wantErr: false,
@@ -485,7 +485,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"a", "bc", "aca"}),
 				expr:  []byte("%c%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1, 2},
 			wantErr: false,
@@ -497,7 +497,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a%c"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1},
 			wantErr: false,
@@ -509,7 +509,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a_c"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0},
 			wantErr: false,
@@ -521,7 +521,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a_"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{1},
 			wantErr: false,
@@ -533,7 +533,7 @@ func Test_sliceNullLikePure(t *testing.T) {
 				s:     makeArgs([]string{"abc", "ac", "aca"}),
 				expr:  []byte("a%"),
 				rs:    make([]int64, 3),
-				nulls: roaring.NewBitmap(),
+				nulls: bitmap.New(0),
 			},
 			want:    []int64{0, 1, 2},
 			wantErr: false,
@@ -541,13 +541,13 @@ func Test_sliceNullLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sliceNullLikePure(tt.args.s, tt.args.expr, tt.args.nulls, tt.args.rs)
+			got, err := sliceContainsNullLikeScalar(tt.args.s, tt.args.expr, tt.args.nulls, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("sliceNullLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("sliceContainsNullLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("sliceNullLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("sliceContainsNullLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -261,8 +261,8 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			id = blk.Fingerprint()
-			key := model.EncodeHiddenKey(id.SegmentID, id.BlockID, uint32(row))
-			cntv, err := rel.GetValueByHiddenKey(key, 2)
+			key := model.EncodePhyAddrKey(id.SegmentID, id.BlockID, uint32(row))
+			cntv, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return
 			}
@@ -310,6 +310,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	if count > left {
 		logutil.Warnf("NotEnough Good %d: Repe %d, Requested %d", goodId, left, count)
 		err = errNotEnoughRepertory
+		return err
 	}
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
@@ -646,7 +647,7 @@ func TestTxn8(t *testing.T) {
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 
 	tae.Close()
@@ -762,7 +763,7 @@ func TestTxn9(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()

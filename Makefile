@@ -1,7 +1,50 @@
-# This Makefile is to build MatrixOne
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+# Copyright 2021 - 2022 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+#
+# Examples
+#
+# By default, make builds the mo-server
+#
+# make
+#
+# To re-build MO -
+#	
+#	make clean
+#	make config
+#	make build
+#
+# To re-build MO in debug mode also with race detector enabled -
+#
+# make clean
+# make config
+# make debug
+#
+# To run static checks - 
+# 
+# make install-static-check-tools
+# make static-check
+#
+# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module. 
+# make vendor
+#
+
+# where am I
+ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+GOBIN := go
 BIN_NAME := mo-server
+SERVICE_BIN_NAME := mo-service
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -9,25 +52,45 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
-MO_Version=$(shell git describe --abbrev=0 --tags)
-TARGET_OS ?=
-TARGET_ARCH ?=
-BVT_BRANCH ?= master
+MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1))
 
-# generate files generated from .template and needs to delete when clean
-GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
-GENERATE_OVERLOAD_MATH := ./pkg/sql/colexec/extend/overload/div.go ./pkg/sql/colexec/extend/overload/minus.go ./pkg/sql/colexec/extend/overload/mod.go ./pkg/sql/colexec/extend/overload/plus.go ./pkg/sql/colexec/extend/overload/mult.go 
-GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/ne.go /pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/gt.go ./pkg/sql/colexec/extend/overload/le.go ./pkg/sql/colexec/extend/overload/lt.go
-GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
-GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
+# cross compilation has been disabled for now
+ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
+$(error cross compilation has been disabled)
+endif
+
+###############################################################################
+# default target
+###############################################################################
+all: build
+
+
+###############################################################################
+# build vendor directory 
+###############################################################################
+
+VENDOR_DIRECTORY := ./vendor
+.PHONY: vendor-build
+vendor-build: 
+	$(info [go mod vendor])
+	@go mod vendor
+
+
+
+###############################################################################
+# code generation
+###############################################################################
 
 # files generated from cmd/generate-config
-# they need to be deleted in cleaning
+# they need to be deleted in the clean target
 CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
 
-# Creating build config
+CONFIG_DEPS=cmd/generate-config/main.go  \
+	cmd/generate-config/config_template.go \
+	cmd/generate-config/system_vars_def.toml
+
 .PHONY: config
-config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
+config: $(CONFIG_DEPS)
 	$(info [Create build config])
 	@go mod tidy
 	@go build -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
@@ -36,51 +99,69 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 	@mv -f cmd/generate-config/system_vars.go pkg/config
 	@mv -f cmd/generate-config/system_vars_test.go pkg/config
 
-.PHONY: generate
-generate: pkg/sql/colexec/extend/overload/$(wildcard *.go)
-	@go generate ./pkg/sql/colexec/extend/overload
-
 .PHONY: generate-pb
 generate-pb:
 	$(ROOT_DIR)/proto/gen.sh
 
 # Generate protobuf files
 .PHONY: pb
-pb: generate-pb fmt
+pb: vendor-build generate-pb fmt
 	$(info all protos are generated) 
 
-# Building mo-server binary
+###############################################################################
+# build mo-server
+###############################################################################
+
+RACE_OPT := 
+DEBUG_OPT := 
+CGO_DEBUG_OPT :=
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
+GO=$(CGO_OPTS) $(GOBIN)
+GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_VERSION)'"
+
+.PHONY: cgo
+cgo:
+	@(cd cgo; make ${CGO_DEBUG_OPT})
+
+BUILD_NAME=binary
+# build mo-server binary
 .PHONY: build
-build: generate cmd/db-server/$(wildcard *.go)
-ifeq ($(TARGET_OS)$(TARGET_ARCH), )
-	$(info [Build binary])
-	@go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-else ifneq ($(TARGET_OS), )
-ifneq ($(TARGET_ARCH), )
-	$(info [Cross Build binary])
-	$(info $(TARGET_OS))
-	$(info $(TARGET_ARCH))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-else
-	$(info [Cross Build binary])
-	$(info $(TARGET_OS))
-	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-endif
-endif
+build: config cgo cmd/db-server/$(wildcard *.go)
+	$(info [Build $(BUILD_NAME)])
+	$(GO) build $(DEBUG_OPT) $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/db-server
 
-# Building mo-server binary for debugging, it uses the latest MatrixCube from master.
+# build mo-server binary for debugging with go's race detector enabled
+# produced executable is 10x slower and consumes much more memory
 .PHONY: debug
-debug: generate cmd/db-server/$(wildcard *.go)
-	$(info [Build binary for debug])
-	go get github.com/matrixorigin/matrixcube
-	go mod tidy
-	go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+debug: override BUILD_NAME := debug-binary
+debug: override RACE_OPT := -race
+debug: override DEBUG_OPT := -gcflags=all="-N -l"
+debug: override CGO_DEBUG_OPT := debug
+debug: build
+
+###############################################################################
+# build mo-service
+###############################################################################
+
+# build mo-service binary
+.PHONY: service
+service: config cgo cmd/mo-service/$(wildcard *.go)
+	$(info [Build $(BUILD_NAME)])
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(SERVICE_BIN_NAME) ./cmd/mo-service
+
+.PHONY: debug-service
+debug-service: override BUILD_NAME := debug-binary
+debug-service: override RACE_OPT := -race
+debug-service: service
 
 
+###############################################################################
+# run unit tests
+###############################################################################
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut 
-ut: generate
+ut: config cgo
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
@@ -88,36 +169,18 @@ else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
-# Running build verification tests
-.PHONY: bvt
-bvt: mo-server
-	$(info [Build verification testing])
-ifeq ($(UNAME_S),Darwin)
-	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
-else
-	@cd optools; timeout 60m ./run_bvt.sh BVT False $(BVT_BRANCH)
-endif
+###############################################################################
+# clean
+###############################################################################
 
-# Tear down
 .PHONY: clean
 clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(GENERATE_OVERLOAD_LOGIC)
-	@rm -f $(GENERATE_OVERLOAD_MATH)
-	@rm -f $(GENERATE_OVERLOAD_COMPARE)
-	@rm -f $(GENERATE_OVERLOAD_OTHERS)
-	@rm -f $(GENERATE_OVERLOAD_UNARYS)
-	@rm -f $(CONFIG_CODE_GENERATED)
-ifneq ($(wildcard $(BIN_NAME)),)
-	$(info Remove file $(BIN_NAME))
-	@rm -f $(BIN_NAME)
-endif
-ifneq ($(wildcard $(BUILD_CFG)),)
-	$(info Remove file $(BUILD_CFG))
-	@rm -f $(BUILD_CFG)
-endif
+	rm -f $(CONFIG_CODE_GENERATED) $(BIN_NAME) $(SERVICE_BIN_NAME) $(BUILD_CFG)
+	rm -rf $(VENDOR_DIRECTORY)
+	$(MAKE) -C cgo clean
 
 ###############################################################################
 # static checks
@@ -127,26 +190,18 @@ endif
 fmt:
 	gofmt -l -s -w .
 
-
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.48.0
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/google/go-licenses@latest
-	@go install honnef.co/go/tools/cmd/staticcheck@latest
+	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-# TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
-DIRS=pkg/... \
-	 cmd/...
-
-EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert \
-	-E prealloc -E gofmt -E stylecheck
 
 .PHONY: static-check
-static-check: generate
-	@staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
-	@go vet -vettool=$(which molint) ./...
-	@go-licenses check ./...
-	@for p in $(DIRS); do \
-    golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
-  done;
+static-check: config cgo
+	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) license-eye -c .licenserc.yml header check
+	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
+	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
+
+

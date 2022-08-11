@@ -8,9 +8,9 @@ select +9999999999999999999,-9999999999999999999;
 9999999999999999999	-9999999999999999999
 9999999999999999999	-9999999999999999999
 select cast(9223372036854775808 as unsigned)+1;
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select 9223372036854775808+1;
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select -(0-3),round(-(0-3)), round(9999999999999999999);
 -(0 - 3)	round(-(0 - 3))	round(9999999999999999999)
 3	3	9999999999999999999
@@ -22,17 +22,17 @@ select -1,-11,-101,-1001,-10001,-100001,-1000001,-10000001,-100000001,-100000000
 -1	-11	-101	-1001	-10001	-100001	-1000001	-10000001	-100000001	-1000000001	-10000000001	-100000000001	-1000000000001	-10000000000001	-100000000000001	-1000000000000001	-10000000000000001	-100000000000000001	-1000000000000000001	-10000000000000000001
 create table t1 (a bigint unsigned not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
-select * from t1;
+select * from t1 order by 1 asc;
 a
 18446744073709551612
 18446744073709551613
 18446744073709551614
 18446744073709551615
-select * from t1 where a=18446744073709551615;
+select * from t1 where a=18446744073709551615 order by a asc;
 a
 18446744073709551615
 delete from t1 where a=18446744073709551615;
-select * from t1;
+select * from t1 order by 1 asc;
 a
 18446744073709551612
 18446744073709551613
@@ -40,7 +40,7 @@ a
 drop table t1;
 create table t1 ( a int not null default 1, big bigint primary key );
 insert into t1 (big) values (-1),(12345678901234567),(9223372036854775807);
-select * from t1;
+select * from t1 order by a desc, big asc;
 a	big
 1	-1
 1	12345678901234567
@@ -72,9 +72,9 @@ a	big
 1	18446744073709551613
 1	18446744073709551614
 select min(big),max(big),max(big)-1 from t1;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 select min(big),max(big),max(big)-1 from t1 group by a;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 drop table t1;
 create table t1 (id bigint primary key, a int);
 insert into t1 values (1,1);
@@ -100,11 +100,11 @@ insert into t1 values(17156792991891826145, 1);
 insert into t1 values( 9223372036854775807, 2);
 insert into t2 values(17156792991891826145, 3);
 insert into t2 values( 9223372036854775807, 4);
-select * from t1;
+select * from t1 order by 1 asc, 2 desc;
 value64	value32
 9223372036854775807	2
 17156792991891826145	1
-select * from t2;
+select * from t2 order by 2 desc;
 value64	value32
 9223372036854775807	4
 17156792991891826145	3
@@ -112,14 +112,14 @@ select * from t1 join t2 on t1.value64=t2.value64 order by t1.value64 asc, t2.va
 value64	value32	value64	value32
 9223372036854775807	2	9223372036854775807	4
 17156792991891826145	1	17156792991891826145	3
-select * from t1 join t2 on t1.value64=t2.value64 where t1.value64=17156792991891826145;
+select * from t1 join t2 on t1.value64=t2.value64 where t1.value64=17156792991891826145 order by 1+2 desc;
 value64	value32	value64	value32
 17156792991891826145	1	17156792991891826145	3
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (sint64 bigint not null);
 insert into t1 values (-9223372036854775808);
-select * from t1;
+select * from t1 order by abs(1);
 sint64
 -9223372036854775808
 drop table t1;
@@ -133,11 +133,11 @@ bigint_col
 17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;
-overflow from bigint unsigned to bigint
+Can't cast '10000002383263201056' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast(19999999999999999999 as signed);
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+Can't cast '19999999999999999999' from DECIMAL128 type to BIGINT type. Reason: overflow
 select cast(-19999999999999999999 as signed);
-Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
+Can't cast '-19999999999999999999' from DECIMAL128 type to BIGINT type. Reason: overflow
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));
@@ -173,25 +173,25 @@ id
 SELECT * from t_bigint WHERE id = 1.1e0;
 id
 SELECT * from t_bigint WHERE id = '1.1';
-id
+can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id = '1.1e0';
-id
+can't cast '1.1e0' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_bigint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_bigint WHERE id IN ('1.1', '2.2');
-id
+can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id IN ('1.1e0', '2.2e0');
-id
+can't cast '1.1e0' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
-id
+can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
-id
+can't cast '1.1' from VARCHAR type to BIGINT type.
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
+can't cast '1.1e0' from VARCHAR type to BIGINT type.
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);
@@ -214,13 +214,13 @@ insert into t values(8894754949779693579,2);
 insert into t values(17790886498483827171,3);
 select count(*) from t
 where id>=8894754949779693574 and id =17790886498483827171 order by 1 asc;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 select count(*) from t
 where id between 8894754949779693574 and 17790886498483827171;
-overflow from bigint unsigned to bigint
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 drop table t;
 SELECT (184467440737095 BETWEEN 0 AND 18446744073709551500);
-overflow from bigint unsigned to bigint
+Can't cast '18446744073709551500' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 SELECT 184467440737095 >= 0;
 184467440737095 >= 0
 true
@@ -240,13 +240,13 @@ SELECT ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808
 ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808 )
 true
 SELECT ( 9223372036854775807 BETWEEN 9223372036854775808 AND 1 );
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 SELECT ( -1 BETWEEN 9223372036854775808 AND 1 );
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 SELECT ( 0 BETWEEN 9223372036854775808 AND 1 );
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 SELECT ( 1 BETWEEN 9223372036854775808 AND 1 );
-overflow from bigint unsigned to bigint
+Can't cast '9223372036854775808' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

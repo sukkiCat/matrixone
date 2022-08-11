@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package model
 
 import (
@@ -16,12 +30,12 @@ func TestPrepareHiddenData(t *testing.T) {
 		BlockID:   3,
 	}
 	prefix := EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
-	data, err := PrepareHiddenData(typ, prefix, 0, 20)
+	data, err := PreparePhyAddrData(typ, prefix, 0, 20)
 	assert.NoError(t, err)
 	assert.Equal(t, 20, data.Length())
 	for i := 0; i < data.Length(); i++ {
 		v := data.Get(i)
-		sid, bid, off := DecodeHiddenKey(types.EncodeFixed(v.(types.Decimal128)))
+		sid, bid, off := DecodePhyAddrKey(types.EncodeFixed(v.(types.Decimal128)))
 		assert.Equal(t, sid, id.SegmentID)
 		assert.Equal(t, bid, id.BlockID)
 		assert.Equal(t, off, uint32(i))

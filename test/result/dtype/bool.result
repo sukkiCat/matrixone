@@ -8,7 +8,7 @@ true	false
 true	true
 false	false
 null	null
-SELECT * FROM t1 WHERE IF(a AND 1, 0, 1);
+SELECT * FROM t1 WHERE IF(a AND 1, 0, 1) order by a asc;
 a	b
 false	true
 false	false
@@ -18,7 +18,7 @@ a	b
 false	true
 false	false
 null	null
-SELECT * FROM t1 where NOT(a AND 1);
+SELECT * FROM t1 where NOT(a AND 1) order by a asc, b desc;
 a	b
 false	true
 false	false
@@ -34,11 +34,11 @@ SELECT * FROM t1 where (1 AND a)=0;
 a	b
 false	true
 false	false
-SELECT * FROM t1 where (1 AND a)=1;
+SELECT * FROM t1 where (1 AND a)=1 order by a asc, 2 asc;
 a	b
 true	false
 true	true
-SELECT * FROM t1 where (1 AND a) IS NULL;
+SELECT * FROM t1 where (1 AND a) IS NULL order by 1 desc, 2 asc;
 a	b
 null	null
 select not a,a and b,a or b,a xor b from t1;
@@ -119,7 +119,7 @@ a	b
 false	true
 true	true
 false	false
-select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc;
+select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
 a	b
 true	2
 true	2
@@ -127,10 +127,9 @@ select a,count(a) from t1 group by a having count(a)>1;
 a	count(a)
 false	2
 true	2
-select a,any_value(b) from t1 group by a order by a asc;
+select a,any_value(b) from t1 where isnotnull(a) group by a order by a asc;
 a	any_value(b)
 false	true
-null	null
 true	false
 select a,b from t1 where a in (0,1);
 a	b
@@ -144,11 +143,11 @@ select distinct t.a from (select * from t1) t where a not in (2) order by t.a as
 Can't cast '2' as boolean type.
 select a and b from t1 where exists (select a from t1 where a is null) order by a desc;
 a and b
+false
 true
 false
+false
 null
-false
-false
 update t1 set a=false where b is null;
 delete from t1 where a=false;
 select * from t1;

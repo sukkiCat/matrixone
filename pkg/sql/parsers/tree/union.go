@@ -16,7 +16,7 @@ package tree
 
 import "fmt"
 
-//the UNION statement
+// the UNION statement
 type UnionClause struct {
 	SelectStatement
 	Type UnionType
@@ -46,19 +46,21 @@ type UnionTypeRecord struct {
 	Distinct bool
 }
 
-//set operations
+// set operations
 type UnionType int
 
 const (
 	UNION UnionType = iota
 	INTERSECT
 	EXCEPT
+	UT_MINUS
 )
 
 var unionTypeName = [...]string{
 	UNION:     "union",
 	INTERSECT: "intersect",
 	EXCEPT:    "except",
+	UT_MINUS:  "minus",
 }
 
 func (i UnionType) String() string {
@@ -68,7 +70,7 @@ func (i UnionType) String() string {
 	return unionTypeName[i]
 }
 
-//func NewUnionClause(t UnionType,l,r *Select,a bool)*UnionClause{
+// func NewUnionClause(t UnionType,l,r *Select,a bool)*UnionClause{
 func NewUnionClause(t UnionType, l, r SelectStatement, a bool) *UnionClause {
 	return &UnionClause{
 		Type:  t,

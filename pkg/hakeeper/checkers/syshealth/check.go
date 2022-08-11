@@ -16,7 +16,6 @@ package syshealth
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -27,8 +26,9 @@ const (
 
 // Check checks system healthy or not.
 // If system wasn't healthy, we would generate
-// operators in order to shutdown all stores.
+// operators in order to shut down all stores.
 func Check(
+	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
 	dnState pb.DNState,
 	logState pb.LogState,
@@ -37,13 +37,14 @@ func Check(
 	sysHealthy := true
 
 	// parse all log stores for expired stores mainly
-	logStores := parseLogStores(logState, currTick)
+	logStores := parseLogState(cfg, logState, currTick)
 	if len(logStores.expired) == 0 {
 		return nil, sysHealthy
 	}
 
 	// check system healthy or not
-	for _, shard := range logShardsWithExpired(logStores.expired, logState, cluster) {
+	expiredShards := listExpiredShards(logStores.expired, logStores.working, logState, cluster)
+	for _, shard := range expiredShards {
 		// if one of log shards wasn't healthy, the entire system wasn't healthy.
 		if !shard.healthy() {
 			sysHealthy = false
@@ -56,9 +57,9 @@ func Check(
 	}
 
 	// parse all dn stores
-	dnStores := parseDnStores(dnState, currTick)
+	dnStores := parseDnState(cfg, dnState, currTick)
 
-	// generate operators to shutdown all stores
+	// generate operators to shut down all stores
 	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
 	operators = append(operators, logStores.shutdownExpiredStores()...)
 	operators = append(operators, logStores.shutdownWorkingStores()...)
@@ -68,7 +69,7 @@ func Check(
 	return operators, sysHealthy
 }
 
-// logShardMap is just an syntax sugar.
+// logShardMap is just a syntax sugar.
 type logShardMap map[uint64]*logShard
 
 func newLogShardMap() logShardMap {
@@ -86,20 +87,46 @@ func (m logShardMap) registerExpiredReplica(replica pb.LogReplicaInfo, cluster p
 	m[shardID].registerExpiredReplica(replicaID)
 }
 
-// logShardsWithExpired gathers metadata for expired log shards.
-func logShardsWithExpired(
-	expiredStores map[util.StoreID]struct{},
+// registerWorkingReplica registers replica as working.
+func (m logShardMap) registerWorkingReplica(replica pb.LogReplicaInfo, cluster pb.ClusterInfo) {
+	replicaID := replica.ReplicaID
+	shardID := replica.ShardID
+
+	if _, ok := m[shardID]; !ok {
+		m[shardID] = newLogShard(shardID, getLogShardSize(shardID, cluster))
+	}
+	m[shardID].registerWorkingReplica(replicaID)
+}
+
+// listExpiredShards lists those shards which has expired replica.
+func listExpiredShards(
+	expiredStores map[string]struct{},
+	workingStores map[string]struct{},
 	logState pb.LogState,
 	cluster pb.ClusterInfo,
 ) logShardMap {
-	expiredShardMap := newLogShardMap()
+	expired := newLogShardMap()
+
+	// register log shards on expired stores
 	for id := range expiredStores {
-		expiredReplicas := logState.Stores[string(id)].Replicas
+		expiredReplicas := logState.Stores[id].Replicas
 		for _, replica := range expiredReplicas {
-			expiredShardMap.registerExpiredReplica(replica, cluster)
+			expired.registerExpiredReplica(replica, cluster)
 		}
 	}
-	return expiredShardMap
+
+	// register working replica for
+	for id := range workingStores {
+		workingReplicas := logState.Stores[id].Replicas
+		for _, replica := range workingReplicas {
+			// only register working replica for expired shards
+			if _, ok := expired[replica.ShardID]; ok {
+				expired.registerWorkingReplica(replica, cluster)
+			}
+		}
+	}
+
+	return expired
 }
 
 // getLogShardSize gets raft group size for the specified shard.
@@ -117,6 +144,7 @@ type logShard struct {
 	shardID          uint64
 	numberOfReplicas uint64
 	expiredReplicas  map[uint64]struct{}
+	workingReplicas  map[uint64]struct{}
 }
 
 func newLogShard(shardID uint64, numberOfReplicas uint64) *logShard {
@@ -124,6 +152,7 @@ func newLogShard(shardID uint64, numberOfReplicas uint64) *logShard {
 		shardID:          shardID,
 		numberOfReplicas: numberOfReplicas,
 		expiredReplicas:  make(map[uint64]struct{}),
+		workingReplicas:  make(map[uint64]struct{}),
 	}
 }
 
@@ -132,27 +161,32 @@ func (s *logShard) registerExpiredReplica(replicaID uint64) {
 	s.expiredReplicas[replicaID] = struct{}{}
 }
 
+// registerWorkingReplica registers working replica ID.
+func (s *logShard) registerWorkingReplica(replicaID uint64) {
+	s.workingReplicas[replicaID] = struct{}{}
+}
+
 // healthy checks whether log shard working or not.
 func (s *logShard) healthy() bool {
 	if s.numberOfReplicas > 0 &&
-		len(s.expiredReplicas)*2 >= int(s.numberOfReplicas) {
-		return false
+		len(s.workingReplicas)*2 > int(s.numberOfReplicas) {
+		return true
 	}
-	return true
+	return false
 }
 
 // storeSet separates stores as expired and working.
 type storeSet struct {
 	serviceType pb.ServiceType
-	working     map[util.StoreID]struct{}
-	expired     map[util.StoreID]struct{}
+	working     map[string]struct{}
+	expired     map[string]struct{}
 }
 
 func newStoreSet(serviceType pb.ServiceType) *storeSet {
 	return &storeSet{
 		serviceType: serviceType,
-		working:     make(map[util.StoreID]struct{}),
-		expired:     make(map[util.StoreID]struct{}),
+		working:     make(map[string]struct{}),
+		expired:     make(map[string]struct{}),
 	}
 }
 
@@ -166,39 +200,39 @@ func (s *storeSet) shutdownExpiredStores() []*operator.Operator {
 	return shutdownStores(s.serviceType, s.expired)
 }
 
-// shutdownWorkingStores generates operators to shutdown working stores.
+// shutdownWorkingStores generates operators to shut down working stores.
 func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
 	return shutdownStores(s.serviceType, s.working)
 }
 
-// parseLogStores separates log stores as expired and working.
-func parseLogStores(logState pb.LogState, currTick uint64) *storeSet {
+// parseLogState separates log stores as expired and working.
+func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.LogService)
 	for id, storeInfo := range logState.Stores {
-		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.LogStoreTimeout) < currTick {
-			set.expired[util.StoreID(id)] = struct{}{}
+		if cfg.LogStoreExpired(storeInfo.Tick, currTick) {
+			set.expired[id] = struct{}{}
 		} else {
-			set.working[util.StoreID(id)] = struct{}{}
+			set.working[id] = struct{}{}
 		}
 	}
 	return set
 }
 
-// parseDnStores separates dn stores as expired and working.
-func parseDnStores(dnState pb.DNState, currTick uint64) *storeSet {
+// parseDnState separates dn stores as expired and working.
+func parseDnState(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
-		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.DnStoreTimeout) < currTick {
-			set.expired[util.StoreID(id)] = struct{}{}
+		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
+			set.expired[id] = struct{}{}
 		} else {
-			set.working[util.StoreID(id)] = struct{}{}
+			set.working[id] = struct{}{}
 		}
 	}
 	return set
 }
 
-// shutdownStores generates operators to shutdown stores.
-func shutdownStores(serviceType pb.ServiceType, stores map[util.StoreID]struct{}) []*operator.Operator {
+// shutdownStores generates operators to shut down stores.
+func shutdownStores(serviceType pb.ServiceType, stores map[string]struct{}) []*operator.Operator {
 	ops := make([]*operator.Operator, 0, len(stores))
 
 	switch serviceType {
@@ -206,7 +240,7 @@ func shutdownStores(serviceType pb.ServiceType, stores map[util.StoreID]struct{}
 		for id := range stores {
 			op := operator.NewOperator(
 				"logservice", operator.NoopShardID, operator.NoopEpoch,
-				operator.StopLogStore{StoreID: string(id)},
+				operator.StopLogStore{StoreID: id},
 			)
 			ops = append(ops, op)
 		}
@@ -214,7 +248,7 @@ func shutdownStores(serviceType pb.ServiceType, stores map[util.StoreID]struct{}
 		for id := range stores {
 			op := operator.NewOperator(
 				"dnservice", operator.NoopShardID, operator.NoopEpoch,
-				operator.StopDnStore{StoreID: string(id)},
+				operator.StopDnStore{StoreID: id},
 			)
 			ops = append(ops, op)
 		}

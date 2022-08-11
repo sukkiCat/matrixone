@@ -30,9 +30,9 @@ const (
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
 	//secsPerWeek   = 7 * secsPerDay
-	microSecondBitMask = 0xfffff
-	MaxDatetimeYear    = 9999
-	MinDatetimeYear    = 1
+	//microSecondBitMask = 0xfffff
+	MaxDatetimeYear = 9999
+	MinDatetimeYear = 1
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
@@ -54,8 +54,8 @@ const (
 )
 
 var (
-	errIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime value")
-	errInvalidDatetimeAddInterval = errors.New(errno.DataException, "Invalid datetime result")
+	ErrIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime format")
+	ErrInvalidDatetimeAddInterval = errors.New(errno.DataException, "Beyond the range of datetime")
 )
 
 func (dt Datetime) String() string {
@@ -85,17 +85,18 @@ func (dt Datetime) String2(precision int32) string {
 // 3. yyyymmddhhmmss(.msec)
 // during parsing, the Datetime value will be rounded(away from zero) to the predefined precision, for example:
 // Datetime(3) input string   					parsing result
-// 				"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
-//				"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
-// 				"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
-// 				"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
+//
+//	"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
+//	"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
+//	"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
+//	"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
 func ParseDatetime(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
 		}
-		return -1, errIncorrectDatetimeValue
+		return -1, ErrIncorrectDatetimeValue
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -108,62 +109,65 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		var unum uint64
 		strArr := strings.Split(s, " ")
 		if len(strArr) != 2 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		// solve year/month/day
 		front := strings.Split(strArr[0], "-")
 		if len(front) != 3 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		num, err = strconv.ParseInt(front[0], 10, 32)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		year = int32(num)
 		unum, err = strconv.ParseUint(front[1], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		month = uint8(unum)
 		unum, err = strconv.ParseUint(front[2], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		day = uint8(unum)
 
 		if !validDate(year, month, day) {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 
 		middleAndBack := strings.Split(strArr[1], ".")
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
+		if len(middle) != 3 {
+			return -1, ErrIncorrectDatetimeValue
+		}
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		hour = uint8(unum)
 		unum, err = strconv.ParseUint(middle[1], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		minute = uint8(unum)
 		unum, err = strconv.ParseUint(middle[2], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		second = uint8(unum)
 		if !validTimeInDay(hour, minute, second) {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		// solve microsecond
 		if len(middleAndBack) == 2 {
 			msec, carry, err = getMsec(middleAndBack[1], precision)
 			if err != nil {
-				return -1, errIncorrectDatetimeValue
+				return -1, ErrIncorrectDatetimeValue
 			}
 		} else if len(middleAndBack) > 2 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
@@ -177,10 +181,10 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 				msecStr := s[15:]
 				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
-					return -1, errIncorrectDatetimeValue
+					return -1, ErrIncorrectDatetimeValue
 				}
 			} else {
-				return -1, errIncorrectDatetimeValue
+				return -1, ErrIncorrectDatetimeValue
 			}
 		}
 	}
@@ -208,11 +212,17 @@ func (dt Datetime) UTC() Datetime {
 }
 
 func (dt Datetime) UnixTimestamp() int64 {
-	return dt.sec() - unixEpoch
+	return dt.sec() - unixEpoch - localTZ
 }
 
 func FromUnix(time int64) Datetime {
-	return Datetime((time + unixEpoch) << 20)
+	return Datetime((time + unixEpoch + localTZ) << 20)
+}
+
+func UnixToTimestamp(time int64) Timestamp {
+	localTZAligned := localTZ << 20
+	dt := FromUnix(time)
+	return Timestamp(dt.ToInt64() - localTZAligned)
 }
 
 func Now() Datetime {
@@ -232,6 +242,10 @@ func Now() Datetime {
 
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
+}
+
+func (dt Datetime) ToInt64() int64 {
+	return int64(dt)
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
@@ -315,8 +329,8 @@ func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHou
 	return FromClock(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()/1000)), true
 }
 
-// AddInterval
-// now date or datetime use the function to add/sub date, we need a bool arg to tell isDate/isDatetime
+// AddInterval now date or datetime use the function to add/sub date,
+// we need a bool arg to tell isDate/isDatetime
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
@@ -367,6 +381,23 @@ func (dt Datetime) Day() uint8 {
 
 func (dt Datetime) WeekOfYear() (int32, uint8) {
 	return dt.ToDate().WeekOfYear()
+}
+
+func (dt Datetime) DayOfYear() uint16 {
+	return dt.ToDate().DayOfYear()
+}
+
+func (dt Datetime) DayOfWeek() Weekday {
+	return dt.ToDate().DayOfWeek()
+}
+
+func (dt Datetime) Week(mode int) int {
+	return dt.ToDate().Week(mode)
+}
+
+// YearWeek returns year and week.
+func (dt Datetime) YearWeek(mode int) (year int, week int) {
+	return dt.ToDate().YearWeek(mode)
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {

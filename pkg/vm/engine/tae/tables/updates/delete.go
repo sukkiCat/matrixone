@@ -17,11 +17,13 @@ package updates
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -42,13 +44,14 @@ type DeleteNode struct {
 	logIndex   *wal.Index
 	logIndexes []*wal.Index
 	mask       *roaring.Bitmap
-	startTs    uint64
-	commitTs   uint64
+	startTs    types.TS
+	commitTs   types.TS
 	nt         NodeType
 	id         *common.ID
+	dt         handle.DeleteType
 }
 
-func NewMergedNode(commitTs uint64) *DeleteNode {
+func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
 		RWMutex:    new(sync.RWMutex),
 		commitTs:   commitTs,
@@ -60,12 +63,13 @@ func NewMergedNode(commitTs uint64) *DeleteNode {
 	return n
 }
 
-func NewDeleteNode(txn txnif.AsyncTxn) *DeleteNode {
+func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
 		RWMutex: new(sync.RWMutex),
 		mask:    roaring.New(),
 		txn:     txn,
 		nt:      NT_Normal,
+		dt:      dt,
 	}
 	if txn != nil {
 		n.startTs = txn.GetStartTS()
@@ -101,16 +105,16 @@ func (node *DeleteNode) Compare(o common.NodePayload) int {
 	op.RLock()
 	defer op.RUnlock()
 	if node.commitTs == op.commitTs {
-		if node.startTs < op.startTs {
+		if node.startTs.Less(op.startTs) {
 			return -1
-		} else if node.startTs > op.startTs {
+		} else if node.startTs.Greater(op.startTs) {
 			return 1
 		}
 		return 0
 	}
-	if node.commitTs == txnif.UncommitTS {
+	if node.commitTs.Equal(txnif.UncommitTS) {
 		return 1
-	} else if op.commitTs == txnif.UncommitTS {
+	} else if op.commitTs.Equal(txnif.UncommitTS) {
 		return -1
 	}
 	return 0
@@ -148,8 +152,8 @@ func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
 		}
 	}
 }
-func (node *DeleteNode) GetCommitTSLocked() uint64 { return node.commitTs }
-func (node *DeleteNode) GetStartTS() uint64        { return node.startTs }
+func (node *DeleteNode) GetCommitTSLocked() types.TS { return node.commitTs }
+func (node *DeleteNode) GetStartTS() types.TS        { return node.startTs }
 
 func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
@@ -173,7 +177,6 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
-	defer node.Unlock()
 	if node.txn == nil {
 		panic("DeleteNode | ApplyCommit | LogicErr")
 	}
@@ -184,7 +187,8 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	return
+	node.Unlock()
+	return node.OnApply()
 }
 
 func (node *DeleteNode) GeneralString() string {
@@ -287,11 +291,13 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 func (node *DeleteNode) ApplyRollback() (err error) { return }
 
 func (node *DeleteNode) OnApply() (err error) {
-	listener := node.chain.mvcc.GetDeletesListener()
-	if listener == nil {
-		return
+	if node.dt == handle.DT_Normal {
+		listener := node.chain.mvcc.GetDeletesListener()
+		if listener == nil {
+			return
+		}
+		err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	}
-	err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	return
 }
 

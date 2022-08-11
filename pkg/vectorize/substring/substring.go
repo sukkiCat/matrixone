@@ -16,6 +16,7 @@ package substring
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 )
 
 /*
@@ -44,54 +45,68 @@ func init() {
 	SubstringDynamicOffsetBounded = substringDynamicOffsetBounded
 }
 
-//Slice from left to right, starting from 0
+// Slice from left to right, starting from 0
 func getSliceFromLeft(bytes []byte, offset int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[offset:], elemsize - offset
+	substrRune := sourceRune[offset:]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // Cut the slice with length from left to right, starting from 0
 func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
-
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if length < 0 {
 		length = 0
 	}
 	if offset >= elemsize || length < 0 {
 		return []byte{}, 0
 	}
-	return bytes[offset : offset+min(length, elemsize-offset)], min(length, elemsize-offset)
+	substrRune := sourceRune[offset : offset+min(length, elemsize-offset)]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // Cut slices from right to left, starting from 1
 func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[elemsize-offset:], offset
+	substrRune := sourceRune[elemsize-offset:]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
 // From right to left, cut the slice with length from 1
 func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
-	elemsize := int64(len(bytes))
+	sourceRune := []rune(string(bytes))
+	elemsize := int64(len(sourceRune))
 	if length < 0 {
 		length = 0
 	}
-	if length < 0 {
+	if length < 0 || offset < 0 {
 		return []byte{}, 0
 	}
-
 	if offset > elemsize {
 		return []byte{}, 0
 	}
-	return bytes[elemsize-offset : elemsize-offset+min(length, offset)], min(length, offset)
+	substrRune := sourceRune[elemsize-offset : elemsize-offset+min(length, offset)]
+	substrSlice := []byte(string(substrRune))
+	substrSliceLen := int64(len(substrSlice))
+	return substrSlice, substrSliceLen
 }
 
-//The length parameter is not bound. Cut the string from the left
+// The length parameter is not bound. Cut the string from the left
 func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -115,7 +130,7 @@ func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 	return res
 }
 
-//The length parameter is not bound. Cut the string from the right
+// The length parameter is not bound. Cut the string from the right
 func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -138,7 +153,7 @@ func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, 
 	return res
 }
 
-//The length parameter is not bound. Cut the string from 0
+// The length parameter is not bound. Cut the string from 0
 func substringFromZeroConstOffsetUnbounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
@@ -151,7 +166,7 @@ func substringFromZeroConstOffsetUnbounded(src *types.Bytes, res *types.Bytes) *
 	return res
 }
 
-//bound length parameter. Cut the string from 0
+// bound length parameter. Cut the string from 0
 func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
@@ -164,7 +179,7 @@ func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *ty
 	return res
 }
 
-//Without binding the length parameter, dynamically cut the string
+// Without binding the length parameter, dynamically cut the string
 func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {
@@ -192,6 +207,15 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 			startValue = int64(startColumn.([]int32)[idx])
 		case types.T_int64:
 			startValue = startColumn.([]int64)[idx]
+		case types.T_float64:
+			fval := startColumn.([]float64)[idx]
+			if fval > float64(math.MaxInt64) {
+				startValue = math.MaxInt64
+			} else if fval < float64(math.MinInt64) {
+				startValue = math.MinInt64
+			} else {
+				startValue = int64(fval)
+			}
 		default:
 			startValue = int64(1)
 		}
@@ -232,7 +256,7 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 	return res
 }
 
-//bound length parameter. Cut the string from left
+// bound length parameter. Cut the string from left
 func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -255,7 +279,7 @@ func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 	return res
 }
 
-//bound length parameter. Cut the string from right
+// bound length parameter. Cut the string from right
 func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
@@ -349,19 +373,6 @@ func min(x, y int64) int64 {
 	return y
 }
 
-// get src string value of column by index
-func getStrColumnValue(src *types.Bytes, cursor uint32, curLen uint32, isConstant bool) []byte {
-	var dstValue []byte
-	if isConstant {
-		cursor0 := src.Offsets[0]
-		curLen0 := src.Lengths[0]
-		dstValue = src.Data[cursor0 : cursor0+curLen0]
-	} else {
-		dstValue = src.Data[cursor : cursor+curLen]
-	}
-	return dstValue
-}
-
 // get value of column by index
 func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConsttant bool) int64 {
 	var dstValue int64
@@ -385,6 +396,15 @@ func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConstt
 		dstValue = int64(srcColumn.([]int32)[idx])
 	case types.T_int64:
 		dstValue = srcColumn.([]int64)[idx]
+	case types.T_float64:
+		fval := srcColumn.([]float64)[idx]
+		if fval > float64(math.MaxInt64) {
+			dstValue = math.MaxInt64
+		} else if fval < float64(math.MinInt64) {
+			dstValue = math.MinInt64
+		} else {
+			dstValue = int64(fval)
+		}
 	default:
 		dstValue = int64(1)
 	}

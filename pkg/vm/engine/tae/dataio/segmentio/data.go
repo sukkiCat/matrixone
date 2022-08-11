@@ -28,7 +28,7 @@ type dataFile struct {
 	file   []*DriverFile
 	buf    []byte
 	stat   *fileStat
-	cache  []byte
+	// cache  []byte // unused
 }
 
 type indexFile struct {
@@ -99,7 +99,7 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	}
 	file := df.GetFile()
 	n, err = file.Read(buf)
-	return n, nil
+	return n, err
 }
 
 func (df *dataFile) upgradeFile() {
@@ -145,6 +145,17 @@ func (df *dataFile) SetFile(file *DriverFile, col, idx uint32) {
 func (df *dataFile) Ref()            { df.colBlk.Ref() }
 func (df *dataFile) Unref()          { df.colBlk.Unref() }
 func (df *dataFile) RefCount() int64 { return df.colBlk.RefCount() }
+func (df *dataFile) Destroy() {
+	df.mutex.Lock()
+	defer df.mutex.Unlock()
+	for _, file := range df.file {
+		if file == nil {
+			continue
+		}
+		file.Unref()
+	}
+	df.file = nil
+}
 
 func (df *dataFile) Stat() common.FileInfo { return df.stat }
 

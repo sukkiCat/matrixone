@@ -34,7 +34,7 @@ type blockFile struct {
 	seg       *segmentFile
 	rows      uint32
 	id        uint64
-	ts        uint64
+	ts        types.TS
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
@@ -97,16 +97,18 @@ func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
 }
 
-func (bf *blockFile) WriteTS(ts uint64) (err error) {
+func (bf *blockFile) WriteTS(ts types.TS) (err error) {
 	bf.ts = ts
 	bf.deletes.SetFile(
-		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		//bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%s.del",
+			len(bf.columns), bf.id, ts.ToString())),
 		uint32(len(bf.columns)),
 		uint32(len(bf.columns[0].indexes)))
 	return
 }
 
-func (bf *blockFile) ReadTS() (ts uint64, err error) {
+func (bf *blockFile) ReadTS() (ts types.TS, err error) {
 	ts = bf.ts
 	return
 }
@@ -168,19 +170,9 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	for _, del := range bf.deletes.file {
-		if del == nil {
-			continue
-		}
-		del.Unref()
-	}
+	bf.deletes.Destroy()
 	bf.deletes = nil
-	for _, idx := range bf.indexMeta.file {
-		if idx == nil {
-			continue
-		}
-		idx.Unref()
-	}
+	bf.indexMeta.Destroy()
 	bf.indexMeta = nil
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
@@ -237,7 +229,7 @@ func (bf *blockFile) LoadBatch(
 	return
 }
 
-func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {
+func (bf *blockFile) WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) (err error) {
 	cb, err := bf.OpenColumn(colIdx)
 	if err != nil {
 		return err
@@ -253,7 +245,7 @@ func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector
 	return
 }
 
-func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
 	if err = bf.WriteTS(ts); err != nil {
 		return
 	}
@@ -299,25 +291,26 @@ func (bf *blockFile) PrepareUpdates(
 
 func (bf *blockFile) WriteSnapshot(
 	bat *containers.Batch,
-	ts uint64,
+	ts types.TS,
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {
-	var w bytes.Buffer
-	if deletes != nil {
-		if _, err = deletes.WriteTo(&w); err != nil {
-			return
-		}
-	}
 	if err = bf.WriteTS(ts); err != nil {
 		return err
 	}
 	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
 		return err
 	}
-	// buffer := adaptors.NewBuffer(nil)
-	// defer buffer.Close()
+
 	buffer := new(bytes.Buffer)
+	if deletes != nil {
+		if _, err = deletes.WriteTo(buffer); err != nil {
+			return
+		}
+		if err = bf.WriteDeletes(buffer.Bytes()); err != nil {
+			return
+		}
+	}
 	tool := containers.NewCodecTool()
 	defer tool.Close()
 	for colIdx := range bat.Attrs {

@@ -24,6 +24,15 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+func TestTimeoutError(t *testing.T) {
+	code, _ := toErrorCode(dragonboat.ErrTimeout)
+	assert.Equal(t, pb.Timeout, code)
+	code, _ = toErrorCode(dragonboat.ErrTimeoutTooSmall)
+	assert.Equal(t, pb.Timeout, code)
+	code, _ = toErrorCode(dragonboat.ErrInvalidDeadline)
+	assert.Equal(t, pb.Timeout, code)
+}
+
 func TestErrorConversion(t *testing.T) {
 	mappings := getErrorToCodeMapping()
 	for _, rec := range mappings {
@@ -66,10 +75,13 @@ func TestIsTempError(t *testing.T) {
 		{dragonboat.ErrShardNotReady, true},
 		{dragonboat.ErrInvalidTarget, false},
 		{dragonboat.ErrInvalidRange, false},
+		{dragonboat.ErrShardNotFound, true},
+
+		{ErrNotHAKeeper, true},
 
 		{ErrDeadlineNotSet, false},
 		{ErrInvalidDeadline, false},
-		{ErrInvalidTruncateIndex, false},
+		{ErrInvalidTruncateLsn, false},
 		{ErrNotLeaseHolder, false},
 		{ErrOutOfRange, false},
 		{ErrInvalidShardID, false},

@@ -15,8 +15,10 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -24,25 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func CompareUint64(left, right uint64) int {
-	if left > right {
+func CompareTs(left, right types.TS) int {
+	if left.Greater(right) {
 		return 1
-	} else if left < right {
+	} else if left.Less(right) {
 		return -1
 	}
 	return 0
-}
-
-type Waitable interface {
-	Wait() error
-}
-
-type waitable struct {
-	fn func() error
-}
-
-func (w *waitable) Wait() error {
-	return w.fn()
 }
 
 type CommitInfo struct {
@@ -90,7 +80,7 @@ type BaseEntry struct {
 	CommitInfo
 	PrevCommit         *CommitInfo
 	ID                 uint64
-	CreateAt, DeleteAt uint64
+	CreateAt, DeleteAt types.TS
 }
 
 func NewReplayBaseEntry() *BaseEntry {
@@ -99,9 +89,9 @@ func NewReplayBaseEntry() *BaseEntry {
 	}
 }
 
-func (be *BaseEntry) MaxCommittedTS() uint64 {
+func (be *BaseEntry) MaxCommittedTS() types.TS {
 	if be.Txn == nil {
-		if be.DeleteAt != 0 {
+		if !be.DeleteAt.IsEmpty() {
 			return be.DeleteAt
 		}
 		return be.CreateAt
@@ -109,7 +99,8 @@ func (be *BaseEntry) MaxCommittedTS() uint64 {
 	if be.CreateAt != be.Txn.GetCommitTS() {
 		return be.CreateAt
 	}
-	return 0
+	var cts types.TS
+	return cts
 }
 
 func (be *BaseEntry) CloneCreate() *BaseEntry {
@@ -175,7 +166,7 @@ func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
 }
 
 func (be *BaseEntry) IsCommitted() bool {
-	return be.Txn == nil && be.CreateAt > 0
+	return be.Txn == nil && !be.CreateAt.IsEmpty()
 }
 
 func (be *BaseEntry) GetID() uint64 { return be.ID }
@@ -186,14 +177,14 @@ func (be *BaseEntry) DoCompre(oe *BaseEntry) int {
 	oe.RLock()
 	defer oe.RUnlock()
 	r := 0
-	if be.CreateAt != 0 && oe.CreateAt != 0 {
-		r = CompareUint64(be.CreateAt, oe.CreateAt)
-	} else if be.CreateAt != 0 {
+	if !be.CreateAt.IsEmpty() && !oe.CreateAt.IsEmpty() {
+		r = CompareTs(be.CreateAt, oe.CreateAt)
+	} else if !be.CreateAt.IsEmpty() {
 		r = -1
-	} else if oe.CreateAt != 0 {
+	} else if !oe.CreateAt.IsEmpty() {
 		r = 1
 	} else {
-		r = CompareUint64(be.Txn.GetStartTS(), oe.Txn.GetStartTS())
+		r = CompareTs(be.Txn.GetStartTS(), oe.Txn.GetStartTS())
 	}
 	return r
 }
@@ -201,7 +192,7 @@ func (be *BaseEntry) DoCompre(oe *BaseEntry) int {
 func (be *BaseEntry) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()
-	if be.CreateAt == 0 {
+	if be.CreateAt.IsEmpty() {
 		be.CreateAt = be.Txn.GetCommitTS()
 	}
 	if be.CurrOp == OpSoftDelete {
@@ -241,26 +232,26 @@ func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
 }
 
 func (be *BaseEntry) HasDropped() bool {
-	return be.DeleteAt != 0
+	return !be.DeleteAt.IsEmpty()
 }
 
-func (be *BaseEntry) CreateBefore(ts uint64) bool {
-	if be.CreateAt != 0 {
-		return be.CreateAt < ts
+func (be *BaseEntry) CreateBefore(ts types.TS) bool {
+	if !be.CreateAt.IsEmpty() {
+		return be.CreateAt.Less(ts)
 	}
 	return false
 }
 
-func (be *BaseEntry) CreateAfter(ts uint64) bool {
-	if be.CreateAt != 0 {
-		return be.CreateAt > ts
+func (be *BaseEntry) CreateAfter(ts types.TS) bool {
+	if !be.CreateAt.IsEmpty() {
+		return be.CreateAt.Greater(ts)
 	}
 	return false
 }
 
-func (be *BaseEntry) DeleteBefore(ts uint64) bool {
-	if be.DeleteAt != 0 {
-		return be.DeleteAt < ts
+func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
+	if !be.DeleteAt.IsEmpty() {
+		return be.DeleteAt.Less(ts)
 	}
 	return false
 }
@@ -269,19 +260,19 @@ func (be *BaseEntry) GetLogIndex() *wal.Index {
 	return be.LogIndex
 }
 
-func (be *BaseEntry) DeleteAfter(ts uint64) bool {
-	if be.DeleteAt != 0 {
-		return be.DeleteAt > ts
+func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
+	if !be.DeleteAt.IsEmpty() {
+		return be.DeleteAt.Greater(ts)
 	}
 	return false
 }
 
 func (be *BaseEntry) HasCreated() bool {
-	return be.CreateAt != 0
+	return !be.CreateAt.IsEmpty()
 }
 
-func (be *BaseEntry) ApplyDeleteCmd(ts uint64, index *wal.Index) error {
-	if be.HasDropped() || ts < be.CreateAt {
+func (be *BaseEntry) ApplyDeleteCmd(ts types.TS, index *wal.Index) error {
+	if be.HasDropped() || ts.Less(be.CreateAt) {
 		panic("logic error")
 	}
 	be.PrevCommit = &CommitInfo{
@@ -295,11 +286,11 @@ func (be *BaseEntry) ApplyDeleteCmd(ts uint64, index *wal.Index) error {
 }
 
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	if be.Txn == nil {
+	if be.Txn == nil || be.Txn == txnCtx {
 		if be.HasDropped() {
 			return ErrNotFound
 		}
-		if be.CreateAt > txnCtx.GetStartTS() {
+		if be.CreateAt.Greater(txnCtx.GetStartTS()) {
 			panic("unexpected")
 		}
 		be.PrevCommit = &CommitInfo{
@@ -317,7 +308,7 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 		be.CurrOp = OpSoftDelete
 		return nil
 	}
-	return txnif.TxnWWConflictErr
+	return txnif.ErrTxnWWConflict
 }
 
 func (be *BaseEntry) SameTxn(o *BaseEntry) bool {
@@ -346,7 +337,7 @@ func (be *BaseEntry) IsDroppedCommitted() bool {
 }
 
 func (be *BaseEntry) InTxnOrRollbacked() bool {
-	return be.CreateAt == 0 && be.DeleteAt == 0
+	return be.CreateAt.IsEmpty() && be.DeleteAt.IsEmpty()
 }
 
 func (be *BaseEntry) HasActiveTxn() bool {
@@ -375,7 +366,7 @@ func (be *BaseEntry) IsCommitting() bool {
 }
 
 func (be *BaseEntry) CreateAndDropInSameTxn() bool {
-	if be.CreateAt != 0 && (be.CreateAt == be.DeleteAt) {
+	if !be.CreateAt.IsEmpty() && (be.CreateAt == be.DeleteAt) {
 		return true
 	}
 	return false
@@ -415,7 +406,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok 
 	}
 
 	// If this txn is uncommitted or committing after txn start ts
-	if thisTxn.GetCommitTS() > txn.GetStartTS() {
+	if thisTxn.GetCommitTS().Greater(txn.GetStartTS()) {
 		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
 			ok = false
 		} else {
@@ -434,7 +425,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok 
 		rwlocker.RLock()
 	}
 	if state == txnif.TxnStateUnknown {
-		ok, err = false, txnif.TxnInternalErr
+		ok, err = false, txnif.ErrTxnInternal
 		return
 	}
 	if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
@@ -446,11 +437,17 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok 
 }
 
 func (be *BaseEntry) String() string {
-	s := fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s",
+		OpNames[be.CurrOp],
+		be.ID,
+		be.CreateAt,
+		be.DeleteAt,
+		be.LogIndex.String()))
 	if be.Txn != nil {
-		s = fmt.Sprintf("%s%s", s, be.Txn.Repr())
+		_, _ = w.WriteString(be.Txn.Repr())
 	}
-	return s
+	return w.String()
 }
 
 func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (err error) {
@@ -469,11 +466,11 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 	commitTS := be.Txn.GetCommitTS()
 	// Another active txn is on this entry
 	if commitTS == txnif.UncommitTS {
-		err = txnif.TxnWWConflictErr
+		err = txnif.ErrTxnWWConflict
 		return
 	}
 	// Another committing|rollbacking|committed|rollbacked txn commits|rollbacks after txn starts
-	if commitTS > txn.GetStartTS() {
+	if commitTS.Greater(txn.GetStartTS()) {
 		return
 	}
 	if rwlocker != nil {
@@ -484,7 +481,7 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 		rwlocker.RLock()
 	}
 	if state == txnif.TxnStateUnknown {
-		err = txnif.TxnInternalErr
+		err = txnif.ErrTxnInternal
 	}
 	return
 }

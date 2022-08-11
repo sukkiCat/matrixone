@@ -16,6 +16,7 @@ package updates
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -77,15 +79,15 @@ func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, revers
 	chain.Loop(wrapped, reverse)
 }
 
-func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMutex) (deleted bool, err error) {
+func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Skip txn that started after ts
-		if n.GetStartTS() > ts {
+		if n.GetStartTS().Greater(ts) {
 			return true
 		}
 		n.RLock()
 		// Skip txn that committed|committing after ts
-		if n.GetCommitTSLocked() > ts && n.GetStartTS() != ts {
+		if n.GetCommitTSLocked().Greater(ts) && !n.GetStartTS().Equal(ts) {
 			n.RUnlock()
 			return true
 		}
@@ -110,7 +112,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMute
 				} else if state == txnif.TxnStateCommitting {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.TxnInternalErr
+					err = txnif.ErrTxnInternal
 				}
 			}
 		}
@@ -122,16 +124,16 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMute
 	return
 }
 
-func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts uint64) (err error) {
+func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		n.RLock()
 		defer n.RUnlock()
 		overlap := n.HasOverlapLocked(start, end)
 		if overlap {
-			if n.txn == nil || n.txn.GetStartTS() == ts {
+			if n.txn == nil || n.txn.GetStartTS().Equal(ts) {
 				err = data.ErrNotFound
 			} else {
-				err = txnif.TxnWWConflictErr
+				err = txnif.ErrTxnWWConflict
 			}
 			return false
 		}
@@ -150,8 +152,8 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 
 func (chain *DeleteChain) DepthLocked() int { return chain.Link.Depth() }
 
-func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.DeleteNode {
-	node := NewDeleteNode(txn)
+func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
+	node := NewDeleteNode(txn, deleteType)
 	node.AttachTo(chain)
 	return node
 }
@@ -193,14 +195,17 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	return merged
 }
 
-// [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
-	n, err := chain.CollectDeletesLocked(startTs, true)
+// CollectDeletesInRange collects [startTs, endTs)
+func (chain *DeleteChain) CollectDeletesInRange(
+	startTs, endTs types.TS,
+	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
+	n, err := chain.CollectDeletesLocked(startTs, true, rwlocker)
 	if err != nil {
 		return
 	}
 	startNode := n.(*DeleteNode)
-	n, err = chain.CollectDeletesLocked(endTs-1, true)
+	// n, err = chain.CollectDeletesLocked(endTs-1, true)
+	n, err = chain.CollectDeletesLocked(endTs, true, rwlocker)
 	if err != nil {
 		return
 	}
@@ -220,13 +225,16 @@ func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *ro
 	return
 }
 
-func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (txnif.DeleteNode, error) {
+func (chain *DeleteChain) CollectDeletesLocked(
+	ts types.TS,
+	collectIndex bool,
+	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
-			if n.GetCommitTSLocked() > ts {
+			if n.GetCommitTSLocked().Greater(ts) {
 				return true
 			}
 			if merged == nil {
@@ -237,34 +245,53 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (tx
 		}
 		n.RLock()
 		txn := n.txn
-		if txn != nil && txn.GetStartTS() == ts {
+
+		if txn == nil {
+			if n.GetCommitTSLocked().LessEq(ts) {
+				if merged == nil {
+					merged = NewMergedNode(n.GetCommitTSLocked())
+				}
+				merged.MergeLocked(n, collectIndex)
+			}
+			n.RUnlock()
+			return true
+		}
+
+		if txn.SameTxn(ts) {
 			// Use the delete from the same active txn
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
 			merged.MergeLocked(n, collectIndex)
-		} else if txn != nil && n.GetCommitTSLocked() > ts {
+		} else if txn.CommitAfter(ts) {
 			// Skip txn deletes committed after ts
 			n.RUnlock()
 			return true
-		} else if txn != nil {
+		} else {
 			// Wait committing txn with commit ts before ts
 			n.RUnlock()
+			if rwlocker != nil {
+				rwlocker.RUnlock()
+			}
 			state := txn.GetTxnState(true)
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			// If the txn is rollbacked. skip to the next
-			if state == txnif.TxnStateRollbacked {
+			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
+				if rwlocker != nil {
+					rwlocker.RLock()
+				}
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
+				err = txnif.ErrTxnInternal
+				if rwlocker != nil {
+					rwlocker.RLock()
+				}
 				return false
 			}
-			n.RLock()
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if rwlocker != nil {
+				rwlocker.RLock()
 			}
-			merged.MergeLocked(n, collectIndex)
-		} else if n.GetCommitTSLocked() <= ts {
+			n.RLock()
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}

@@ -16,9 +16,10 @@ package types
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
@@ -259,6 +260,17 @@ func TestParseDatetime(t *testing.T) {
 			args: "1987-12-12 11:02:3",
 			want: "1987-12-12 11:02:03.000000",
 		},
+		{
+			name: "bug",
+			args: "1987-12-12 00:00:00.0000006",
+			want: "1987-12-12 00:00:00.000001",
+		},
+		{
+			name:    "wrong format",
+			args:    "2022-01-02 00:00.00.000050",
+			want:    "",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -287,23 +299,57 @@ func TestUTC(t *testing.T) {
 }
 
 func TestUnix(t *testing.T) {
+	for _, timestr := range []string{"1955-08-25 09:21:34", "2012-01-25 09:21:34"} {
+		motime, _ := ParseDatetime(timestr, 6)
+		motimeUnix := motime.UnixTimestamp()
+		goLcoalTime, _ := time.ParseInLocation("2006-01-02 15:04:05", timestr, time.Local)
+		goUnix := goLcoalTime.Unix()
+
+		require.Equal(t, motimeUnix, goUnix)
+
+		parse_time := FromUnix(motimeUnix)
+		require.Equal(t, motime, parse_time)
+	}
+}
+
+func TestDatetime_DayOfYear(t *testing.T) {
 	cases := []struct {
-		time      string
-		timestamp int64
+		name    string
+		datestr string
 	}{
-		{"1955-08-25 09:21:34", -452961506},
-		{"2012-01-25 09:21:34", 1327483294},
+		{
+			name:    "Test01",
+			datestr: "1955-08-25 09:21:34",
+		},
+		{
+			name:    "Test02",
+			datestr: "2012-01-25 09:21:34",
+		},
+		{
+			name:    "Test03",
+			datestr: "1987-08-25 00:00:00",
+		},
+		{
+			name:    "Test04",
+			datestr: "2022-01-31 00:00:00",
+		},
 	}
 
 	for _, c := range cases {
-		time, _ := ParseDatetime(c.time, 6)
-		unix_time := time.UnixTimestamp()
-		if unix_time != c.timestamp {
-			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
-		}
-		parse_time := FromUnix(unix_time)
-		if time != parse_time {
-			t.Errorf("FromUnix want %s but got %s ", time, parse_time)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			datetime, err := ParseDatetime(c.datestr, 6)
+			if err != nil {
+				t.Fatalf("parse datatime err %+v", err)
+			}
+			t.Logf("date string:%+v \n", c.datestr)
+			year := datetime.DayOfYear()
+			t.Logf("day of year:%+v \n", year)
+
+			year2, week := datetime.WeekOfYear()
+			t.Logf("weekofYear, year:%+v, week:%+v \n", year2, week)
+
+			dayOfWeek := datetime.DayOfWeek()
+			t.Logf("dayOfWeek:%+v \n", dayOfWeek)
+		})
 	}
 }

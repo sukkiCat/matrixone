@@ -1,5 +1,5 @@
--- @bvt:issue#3183
 #ORDER BY
+drop table if exists t;
 CREATE TABLE t (i1 INT,
 d1 DOUBLE,
 e2 DECIMAL(5,2));
@@ -12,7 +12,6 @@ IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
 DROP TABLE t;
--- @bvt:issue
 
 #子查询
 CREATE TABLE t1(a INT);
@@ -27,7 +26,7 @@ drop table t1;
 drop table t2;
 
 #HAVING
--- @bvt:issue#3376
+-- @bvt:issue#3588
 CREATE TABLE t1 (name char(1) default NULL, val int default NULL);
 INSERT INTO t1 VALUES ('a',1),  ('a',2),  ('a',2),  ('a',2),  ('a',3),  ('a',6), ('a',7), ('a',11), ('a',11), ('a',12), ('a',13), ('a',13), ('a',20), ('b',2), ('b',3), ('b',4), ('b',5);
 SELECT s.name, AVG(s.val) AS median FROM (SELECT x.name, x.val FROM t1 x, t1 y WHERE x.name=y.name GROUP BY x.name, x.val HAVING SUM(y.val <= x.val) >= COUNT(*)/2 AND SUM(y.val >= x.val) >= COUNT(*)/2) AS s GROUP BY s.name;
@@ -95,9 +94,9 @@ SELECT  SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
 -- @bvt:issue
 SELECT  SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SELECT  SUM(  c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
--- @bvt:issue#3376
+
 SELECT  SUM(  d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
--- @bvt:issue
+
 SELECT  SUM(  e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
 DROP TABLE t1;
 
@@ -140,15 +139,28 @@ create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 insert into t1 values(2.2);
 
--- @bvt:issue#3376
+-- @bvt:issue#3588
 select cast(sum( df) as signed) from t1;
 select cast(min(df) as signed) from t1;
+-- @bvt:issue
 select 1e8 * sum( df) from t1;
 select 1e8 * min(df) from t1;
--- @bvt:issue
+
 create table t3 (ifl int);
 insert into t3 values(1), (2);
 select cast(min(ifl) as decimal(5,2)) from t3;
 drop table t1;
 drop table t2;
 drop table t3;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select sum(distinct a),sum(distinct grp) from t1;
+insert into t1 values (null,null,'');
+select sum(distinct a),sum(distinct grp) from t1;
+drop table t1;

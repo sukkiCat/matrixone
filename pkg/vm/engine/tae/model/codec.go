@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package model
 
 import (
@@ -11,7 +25,7 @@ import (
 
 type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte
 
-// [48 Bit (BlockID) + 48 Bit (SegmentID)]
+// EncodeBlockKeyPrefix [48 Bit (BlockID) + 48 Bit (SegmentID)]
 func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 	buf := make([]byte, 12)
 	tempBuf := make([]byte, 8)
@@ -31,28 +45,28 @@ func DecodeBlockKeyPrefix(buf []byte) (segmentId, blockId uint64) {
 	return
 }
 
-func EncodeHiddenKey(segmentId, blockId uint64, offset uint32) (key any) {
+func EncodePhyAddrKey(segmentId, blockId uint64, offset uint32) (key any) {
 	buf := make([]byte, 16)
 	prefix := EncodeBlockKeyPrefix(segmentId, blockId)
 	offsetBuf := make([]byte, 4)
-	EncodeHiddenKeyWithPrefix(buf, prefix, offsetBuf, offset)
+	EncodePhyAddrKeyWithPrefix(buf, prefix, offsetBuf, offset)
 	key = types.DecodeFixed[types.Decimal128](buf)
 	return
 }
 
-func EncodeHiddenKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
+func EncodePhyAddrKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
 	copy(dest, prefix)
 	binary.BigEndian.PutUint32(offsetBuf, offset)
 	copy(dest[12:], offsetBuf)
 }
 
-func DecodeHiddenKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
 	reflected := v.(types.Decimal128)
 	src := types.EncodeFixed(reflected)
-	return DecodeHiddenKey(src)
+	return DecodePhyAddrKey(src)
 }
 
-func DecodeHiddenKey(src []byte) (segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKey(src []byte) (segmentId, blockId uint64, offset uint32) {
 	segmentId, blockId = DecodeBlockKeyPrefix(src[:12])
 	offset = binary.BigEndian.Uint32(src[12:])
 	return

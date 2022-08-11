@@ -17,37 +17,25 @@ package output
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("sql output")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	var rbat *batch.Batch
-
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
-		if len(ap.Attrs) > 0 {
-			rbat = batch.New(true, ap.Attrs)
-			for i, attr := range ap.Attrs {
-				rbat.Vecs[i] = batch.GetVector(bat, attr)
-			}
-			rbat.Zs = bat.Zs
-		} else {
-			rbat = bat
-		}
-		if err := ap.Func(ap.Data, rbat); err != nil {
-			batch.Clean(bat, proc.Mp)
+		if err := ap.Func(ap.Data, bat); err != nil {
+			bat.Clean(proc.Mp)
 			return true, err
 		}
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 	}
 	return false, nil
 }

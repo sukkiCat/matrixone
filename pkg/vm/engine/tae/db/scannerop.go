@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -74,7 +75,7 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
 		} else {
 			_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-			logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
+			logutil.Debugf("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
 		}
 	}
 	processor.blkCntOfSegment = 0
@@ -83,7 +84,7 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
 	if !blockEntry.IsActive() {
-		// logutil.Infof("Noop for block %s: table or db was dropped", blockEntry.Repr())
+		// logutil.Debugf("Noop for block %s: table or db was dropped", blockEntry.Repr())
 		processor.blkCntOfSegment = 0
 		return
 	}
@@ -114,8 +115,8 @@ type catalogStatsMonitor struct {
 	*catalog.LoopProcessor
 	db                 *DB
 	unCheckpointedCnt  int64
-	minTs              uint64
-	maxTs              uint64
+	minTs              types.TS
+	maxTs              types.TS
 	lastScheduleTime   time.Time
 	cntLimit           int64
 	intervalLimit      time.Duration
@@ -147,7 +148,7 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 
 func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
-	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS + 1
+	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS.Next()
 	monitor.maxTs = monitor.db.Scheduler.GetSafeTS()
 	return nil
 }
@@ -162,7 +163,7 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 		return nil
 	}
 	if monitor.unCheckpointedCnt >= monitor.cntLimit || time.Since(monitor.lastScheduleTime) >= monitor.intervalLimit {
-		logutil.Infof("[Monotor] Catalog Total Uncheckpointed Cnt [%d, %d]: %d", monitor.minTs, monitor.maxTs, monitor.unCheckpointedCnt)
+		logutil.Debugf("[Monotor] Catalog Total Uncheckpointed Cnt [%d, %d]: %d", monitor.minTs, monitor.maxTs, monitor.unCheckpointedCnt)
 		// logutil.Info("Catalog Checkpoint Scheduled")
 		_, err := monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, nil, monitor.db.Catalog.CheckpointClosure(monitor.maxTs))
 		if err != nil {
@@ -174,7 +175,7 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -192,17 +193,17 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 		scopes := MakeBlockScopes(entry)
 		// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry, GCType_Block))
 		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcBlockClosure(entry, GCType_Block))
-		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
+		logutil.Debugf("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err == tasks.ErrScheduleScopeConflict {
-			// 	logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
+			// 	logutil.Debugf("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
 			// }
 			err = nil
 		}
 	} else {
 		blkData := entry.GetBlockData()
 		ts, terminated := entry.GetTerminationTS()
-		if terminated && blkData.GetMaxCheckpointTS() < ts {
+		if terminated && blkData.GetMaxCheckpointTS().Less(ts) {
 			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
 			if err != nil {
 				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
@@ -214,7 +215,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -231,7 +232,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcSegmentClosure(entry, GCType_Segment))
-		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
+		logutil.Debugf("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err != tasks.ErrScheduleScopeConflict {
 			// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
@@ -245,7 +246,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 }
 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -265,7 +266,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	scopes := MakeTableScopes(entry)
 	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcTableClosure(entry, GCType_Table))
 	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcTableClosure(entry, GCType_Table))
-	logutil.Infof("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	logutil.Debugf("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
 	} else {
@@ -275,7 +276,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -295,7 +296,7 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	scopes := MakeDBScopes(entry)
 	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcDatabaseClosure(entry))
 	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcDatabaseClosure(entry))
-	logutil.Infof("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	logutil.Debugf("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
 	} else {

@@ -29,7 +29,7 @@ type explainImpl struct {
 	Options   []OptionElem
 }
 
-//EXPLAIN stmt statement
+// EXPLAIN stmt statement
 type ExplainStmt struct {
 	explainImpl
 }
@@ -50,9 +50,8 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	}
 
 	stmt := node.explainImpl.Statement
-	switch stmt.(type) {
+	switch st := stmt.(type) {
 	case *ShowColumns:
-		st := stmt.(*ShowColumns)
 		if st.Table != nil {
 			ctx.WriteByte(' ')
 			st.Table.ToTableName().Format(ctx)
@@ -73,7 +72,7 @@ func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
 }
 
-//EXPLAIN ANALYZE statement
+// EXPLAIN ANALYZE statement
 type ExplainAnalyze struct {
 	explainImpl
 }
@@ -87,7 +86,7 @@ func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
 	return &ExplainAnalyze{explainImpl{Statement: stmt, Format: f}}
 }
 
-//EXPLAIN FOR CONNECTION statement
+// EXPLAIN FOR CONNECTION statement
 type ExplainFor struct {
 	explainImpl
 	ID uint64
@@ -120,7 +119,7 @@ func MakeOptionElem(name string, value string) OptionElem {
 }
 
 func MakeOptions(elem OptionElem) []OptionElem {
-	var options []OptionElem = make([]OptionElem, 1)
+	var options = make([]OptionElem, 1)
 	options[0] = elem
 	return options
 }

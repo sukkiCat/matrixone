@@ -16,83 +16,63 @@ package projection
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
-	buf.WriteString("π(")
+	buf.WriteString("projection(")
 	for i, e := range n.Es {
 		if i > 0 {
 			buf.WriteString(",")
 		}
-		buf.WriteString(fmt.Sprintf("%s -> %s:%v", e, n.As[i], n.Rs[i]))
+		buf.WriteString(e.String())
 	}
 	buf.WriteString(")")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	var err error
-
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	rbat := batch.New(true, n.As)
-	for i, e := range n.Es {
-		if attr, ok := e.(*extend.Attribute); ok { // vector reuse
-			vec := batch.GetVector(bat, attr.Name)
-			rbat.Vecs[i] = &vector.Vector{
-				Or:   vec.Or,
-				Data: vec.Data,
-				Typ:  vec.Typ,
-				Col:  vec.Col,
-				Nsp:  vec.Nsp,
-			}
-			vec.Link++
-		} else {
-			if rbat.Vecs[i], _, err = e.Eval(bat, proc); err != nil {
-				rbat.Vecs = rbat.Vecs[:i]
-				batch.Clean(bat, proc.Mp)
-				batch.Clean(rbat, proc.Mp)
-				proc.Reg.InputBatch = &batch.Batch{}
-				return false, err
-			}
-			reuse := false
-			for k := 0; k < len(bat.Vecs); k++ {
-				if rbat.Vecs[i] == bat.Vecs[k] {
-					reuse = true
-					break
-				}
-			}
-			if reuse {
-				rbat.Vecs[i] = &vector.Vector{
-					Ref:  rbat.Vecs[i].Ref,
-					Or:   rbat.Vecs[i].Or,
-					Data: rbat.Vecs[i].Data,
-					Typ:  rbat.Vecs[i].Typ,
-					Col:  rbat.Vecs[i].Col,
-					Nsp:  rbat.Vecs[i].Nsp,
-				}
+	anal.Input(bat)
+	ap := arg.(*Argument)
+	rbat := batch.NewWithSize(len(ap.Es))
+	for i, e := range ap.Es {
+		vec, err := colexec.EvalExpr(bat, proc, e)
+		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+			bat.Clean(proc.GetMheap())
+			rbat.Clean(proc.GetMheap())
+			return false, err
+		}
+		rbat.Vecs[i] = vec
+	}
+	for _, vec := range rbat.Vecs {
+		for k := 0; k < len(bat.Vecs); k++ {
+			if vec == bat.Vecs[k] {
+				bat.Vecs = append(bat.Vecs[:k], bat.Vecs[k+1:]...)
+				break
 			}
 		}
-		rbat.Vecs[i].Ref = n.Rs[i]
 	}
-	for _, e := range n.Es {
-		batch.Reduce(bat, e.Attributes(), proc.Mp)
-	}
-	bat.Vecs = rbat.Vecs
-	bat.Attrs = append(bat.Attrs[:0], rbat.Attrs...)
-	proc.Reg.InputBatch = bat
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
+	bat.Clean(proc.GetMheap())
+	anal.Output(rbat)
+	proc.Reg.InputBatch = rbat
 	return false, nil
 }

@@ -75,20 +75,6 @@ type appendInfo struct {
 	destOff, destLen uint32
 }
 
-func mockAppendInfo() *appendInfo {
-	return &appendInfo{
-		seq:    1,
-		srcOff: 678,
-		srcLen: 2134,
-		dest: &common.ID{
-			TableID:   1234,
-			SegmentID: 45,
-			BlockID:   9,
-		},
-		destOff: 6790,
-		destLen: 9876,
-	}
-}
 func (info *appendInfo) GetDest() *common.ID {
 	return info.dest
 }
@@ -197,7 +183,7 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	impl.driver = driver
 	impl.typ = txnbase.PersistNode
 	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestory
+	impl.DestroyFunc = impl.OnDestroy
 	impl.LoadFunc = impl.OnLoad
 	impl.table = tbl
 	impl.appends = make([]*appendInfo, 0)
@@ -257,7 +243,7 @@ func (n *insertNode) makeLogEntry() wal.LogEntry {
 	if err != nil {
 		panic(err)
 	}
-	if err = e.Unmarshal(buf); err != nil {
+	if err = e.SetPayload(buf); err != nil {
 		panic(err)
 	}
 	return e
@@ -271,7 +257,7 @@ func (n *insertNode) ToTransient() {
 	atomic.StoreInt32(&n.typ, txnbase.TransientNode)
 }
 
-func (n *insertNode) OnDestory() {
+func (n *insertNode) OnDestroy() {
 	if n.data != nil {
 		n.data.Close()
 	}
@@ -329,7 +315,7 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 	en = n.makeLogEntry()
 	info := &entry.Info{
 		Group:     wal.GroupUC,
-		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
+		Uncommits: n.table.store.txn.GetID(),
 	}
 	en.SetInfo(info)
 	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
@@ -366,7 +352,7 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	from := uint32(n.data.Length())
 	an = n.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
-		if attr == catalog.HiddenColumnName {
+		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
@@ -375,17 +361,17 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
 	n.rows = uint32(n.data.Length())
-	err = n.FillHiddenColumn(from, uint32(data.Length())-offset)
+	err = n.FillPhyAddrColumn(from, uint32(data.Length())-offset)
 	return
 }
 
-func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, n.prefix, startRow, length)
+func (n *insertNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.prefix, startRow, length)
 	if err != nil {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.table.entry.GetSchema().HiddenKey.Idx]
+	vec := n.data.Vecs[n.table.entry.GetSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }

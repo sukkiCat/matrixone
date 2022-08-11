@@ -29,6 +29,18 @@ type ClosedIntervals struct {
 	Intervals []*ClosedInterval
 }
 
+func (intervals *ClosedIntervals) GetMax() uint64 {
+	if intervals == nil || len(intervals.Intervals) == 0 {
+		return 0
+	}
+	return intervals.Intervals[len(intervals.Intervals)-1].End
+}
+func (intervals *ClosedIntervals) GetMin() uint64 {
+	if intervals == nil || len(intervals.Intervals) == 0 {
+		return 0
+	}
+	return intervals.Intervals[0].Start
+}
 func (intervals *ClosedIntervals) TryMerge(o ClosedIntervals) {
 	intervals.Intervals = append(intervals.Intervals, o.Intervals...)
 	sort.Slice(intervals.Intervals, func(i, j int) bool {
@@ -134,6 +146,13 @@ func (intervals *ClosedIntervals) GetCardinality() int {
 	return cardinality
 }
 func (intervals *ClosedIntervals) WriteTo(w io.Writer) (n int64, err error) {
+	if intervals == nil {
+		if err = binary.Write(w, binary.BigEndian, uint64(0)); err != nil {
+			return
+		}
+		n += 8
+		return n, nil
+	}
 	if err = binary.Write(w, binary.BigEndian, uint64(len(intervals.Intervals))); err != nil {
 		return
 	}
@@ -171,7 +190,7 @@ func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-//for test
+// Equal is for test
 func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	if len(intervals.Intervals) != len(o.Intervals) {
 		fmt.Printf("%v\n%v\n", intervals.Intervals, o.Intervals)
@@ -191,7 +210,34 @@ func NewClosedIntervals() *ClosedIntervals {
 		Intervals: make([]*ClosedInterval, 0),
 	}
 }
-
+func NewClosedIntervalsBySlice(array []uint64) *ClosedIntervals {
+	ranges := &ClosedIntervals{
+		Intervals: make([]*ClosedInterval, 0),
+	}
+	if len(array) == 0 {
+		return ranges
+	}
+	sort.Slice(array, func(i, j int) bool {
+		return array[i] < array[j]
+	})
+	interval := &ClosedInterval{Start: array[0]}
+	pre := array[0]
+	array = array[1:]
+	for _, idx := range array {
+		if idx <= pre+1 {
+			pre = idx
+			continue
+		} else {
+			interval.End = pre
+			ranges.Intervals = append(ranges.Intervals, interval)
+			interval = &ClosedInterval{Start: idx}
+			pre = idx
+		}
+	}
+	interval.End = pre
+	ranges.Intervals = append(ranges.Intervals, interval)
+	return ranges
+}
 func NewClosedIntervalsByInt(i uint64) *ClosedIntervals {
 	return &ClosedIntervals{
 		Intervals: []*ClosedInterval{{

@@ -17,38 +17,49 @@ package limit
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-// returning only the first n tuples from its input
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+// Call returning only the first n tuples from its input
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	bat := proc.InputBatch()
+	if bat == nil {
+		return true, nil
+	}
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	if n.Seen >= n.Limit {
+	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
+	if ap.Seen >= ap.Limit {
 		proc.Reg.InputBatch = nil
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 		return true, nil
 	}
-	length := len(bat.Zs)
-	newSeen := n.Seen + uint64(length)
-	if newSeen >= n.Limit { // limit - seen
-		batch.SetLength(bat, int(n.Limit-n.Seen))
-		n.Seen = newSeen
+	length := bat.Length()
+	newSeen := ap.Seen + uint64(length)
+	if newSeen >= ap.Limit { // limit - seen
+		batch.SetLength(bat, int(ap.Limit-ap.Seen))
+		ap.Seen = newSeen
+		anal.Output(bat)
+		proc.SetInputBatch(bat)
 		return true, nil
 	}
-	n.Seen = newSeen
+	anal.Output(bat)
+	ap.Seen = newSeen
 	return false, nil
 }

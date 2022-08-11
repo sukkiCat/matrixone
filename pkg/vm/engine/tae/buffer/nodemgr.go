@@ -1,19 +1,21 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
+// limitations under the License.
 
 package buffer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -48,23 +50,33 @@ func NewNodeManager(maxsize uint64, evicter IEvictHolder) *nodeManager {
 }
 
 func (mgr *nodeManager) String() string {
+	var w bytes.Buffer
 	mgr.RLock()
 	defer mgr.RUnlock()
 	loaded := 0
-	s := fmt.Sprintf("<nodeManager>[%s][Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:", mgr.sizeLimiter.String(), len(mgr.nodes),
-		atomic.LoadInt64(&mgr.loadtimes), atomic.LoadInt64(&mgr.evicttimes), atomic.LoadInt64(&mgr.unregistertimes))
+	_, _ = w.WriteString(fmt.Sprintf("<nodeManager>[%s][Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:",
+		mgr.sizeLimiter.String(),
+		len(mgr.nodes),
+		atomic.LoadInt64(&mgr.loadtimes),
+		atomic.LoadInt64(&mgr.evicttimes),
+		atomic.LoadInt64(&mgr.unregistertimes)))
 	for _, node := range mgr.nodes {
 		id := node.GetID()
+		_ = w.WriteByte('\n')
 		node.RLock()
-		s = fmt.Sprintf("%s\n\t%s | %s | Size: %d ", s, id.String(), base.NodeStateString(mgr.nodes[node.GetID()].GetState()), mgr.nodes[node.GetID()].Size())
-		if node.GetState() == base.NODE_LOADED {
+		_, _ = w.WriteString(fmt.Sprintf("\t%s | %s | Size: %d ",
+			id.String(),
+			base.NodeStateString(mgr.nodes[node.GetID()].GetState()),
+			mgr.nodes[node.GetID()].Size()))
+		if node.GetState() == base.NodeLoaded {
 			loaded++
 		}
 		node.RUnlock()
 	}
-	s = fmt.Sprintf("%s\n[Load Status: (%d/%d)]", s, loaded, len(mgr.nodes))
+	_ = w.WriteByte('\n')
+	_, _ = w.WriteString(fmt.Sprintf("[Load Status: (%d/%d)]", loaded, len(mgr.nodes)))
 
-	return s
+	return w.String()
 }
 
 func (mgr *nodeManager) Count() int {

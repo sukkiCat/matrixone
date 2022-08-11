@@ -17,15 +17,20 @@ package moengine
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+
+	"github.com/RoaringBitmap/roaring/roaring64"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	wtf "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -108,13 +113,13 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 	case types.Type_DECIMAL64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.Decimal64(i+offset))
+			data = append(data, wtf.InitDecimal64(int64(i+offset)))
 		}
 		_ = vector.Append(vec, data)
 	case types.Type_DECIMAL128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.Decimal128{Lo: int64(i + offset)})
+			data = append(data, wtf.InitDecimal128(int64(i+offset)))
 		}
 		_ = vector.Append(vec, data)
 	case types.Type_TIMESTAMP:
@@ -135,7 +140,7 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 			data = append(data, types.Datetime(i+offset))
 		}
 		_ = vector.Append(vec, data)
-	case types.Type_CHAR, types.Type_VARCHAR:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_BLOB:
 		data := make([][]byte, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
@@ -211,11 +216,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func GenericUpdateFixedValue[T any](vec *vector.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		if vec.Nsp.Np == nil {
-			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-		} else {
-			vec.Nsp.Np.Add(uint64(row))
-		}
+		nulls.Add(vec.Nsp, uint64(row))
 	} else {
 		vvals := vec.Col.([]T)
 		vvals[row] = v.(T)
@@ -231,11 +232,7 @@ func AppendFixedValue[T any](vec *vector.Vector, v any) {
 	if isNull {
 		row := len(vvals)
 		vec.Col = append(vvals, types.DefaultVal[T]())
-		if vec.Nsp.Np == nil {
-			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-		} else {
-			vec.Nsp.Np.Add(uint64(row))
-		}
+		nulls.Add(vec.Nsp, uint64(row))
 	} else {
 		vec.Col = append(vvals, v.(T))
 	}
@@ -276,16 +273,12 @@ func AppendValue(vec *vector.Vector, v any) {
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.Type_DATETIME:
 		AppendFixedValue[types.Datetime](vec, v)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
 		var val []byte
 		if _, ok := v.(types.Null); ok {
-			if vec.Nsp.Np == nil {
-				vec.Nsp.Np = roaring64.BitmapOf(uint64(offset))
-			} else {
-				vec.Nsp.Np.Add(uint64(offset))
-			}
+			nulls.Add(vec.Nsp, uint64(offset))
 		} else {
 			val = v.([]byte)
 		}
@@ -352,7 +345,7 @@ func GetValue(col *vector.Vector, row uint32) any {
 	case types.Type_TIMESTAMP:
 		data := vals.([]types.Timestamp)
 		return data[row]
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		data := vals.(*types.Bytes)
 		s := data.Offsets[row]
 		e := data.Lengths[row]
@@ -398,7 +391,7 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.Type_TIMESTAMP:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val)
-	case types.Type_VARCHAR, types.Type_CHAR, types.Type_JSON:
+	case types.Type_VARCHAR, types.Type_CHAR, types.Type_JSON, types.Type_BLOB:
 		v := val.([]byte)
 		data := col.Col.(*types.Bytes)
 		tail := data.Data[data.Offsets[row]+data.Lengths[row]:]
@@ -512,8 +505,8 @@ func ApplyDeleteToVector(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Ve
 	}
 	col := vec.Col
 	deletesIterator := deletes.Iterator()
-	np := roaring64.New()
-	var nspIterator roaring64.IntPeekable64
+	np := bitmap.New(0)
+	var nspIterator bitmap.Iterator
 	if vec.Nsp != nil && vec.Nsp.Np != nil {
 		nspIterator = vec.Nsp.Np.Iterator()
 	}
@@ -552,7 +545,7 @@ func ApplyDeleteToVector(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Ve
 				np.Add(n - uint64(deleted))
 			}
 		}
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		data := col.(*types.Bytes)
 		pre := -1
 		for deletesIterator.HasNext() {
@@ -623,18 +616,14 @@ func ApplyUpdateToVector(vec *vector.Vector, mask *roaring.Bitmap, vals map[uint
 			row := iterator.Next()
 			UpdateValue(vec, row, vals[row])
 		}
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		data := col.(*types.Bytes)
 		pre := -1
 		for iterator.HasNext() {
 			row := iterator.Next()
 			v := vals[row]
 			if _, ok := v.(types.Null); ok {
-				if vec.Nsp.Np == nil {
-					vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
-				} else {
-					vec.Nsp.Np.Add(uint64(row))
-				}
+				nulls.Add(vec.Nsp, uint64(row))
 				continue
 			}
 			if pre != -1 {
@@ -656,61 +645,52 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 	switch v.Typ.Oid {
 	case types.Type_BOOL:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]bool), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT8:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int8), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT16:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int16), 2)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_INT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT8:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint8), 1)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT16:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint16), 2)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_FLOAT32:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float32), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_FLOAT64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DATE:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Date), 4)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DATETIME:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_TIMESTAMP:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DECIMAL64:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_DECIMAL128:
 		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-		vec.ResetWithData(bs, v.Nsp.Np)
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		vbs := v.Col.(*types.Bytes)
 		bs.Data = vbs.Data
 		bs.Offset = vbs.Offsets
 		bs.Length = vbs.Lengths
-		vec.ResetWithData(bs, v.Nsp.Np)
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
+	if v.Nsp.Np != nil {
+		np := &roaring64.Bitmap{}
+		np.AddMany(v.Nsp.Np.ToArray())
+		logutil.Infof("sie : %d", np.GetCardinality())
+		vec.ResetWithData(bs, np)
+		return vec
+	}
+	vec.ResetWithData(bs, nil)
 	return vec
 }
 
@@ -758,7 +738,6 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		} else {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
 		}
-		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT8:
 		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
 			bs.Data = make([]byte, v.Length)
@@ -847,7 +826,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		} else {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
 		}
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		if v.Col == nil {
 			bs.Data = make([]byte, 0)
 		} else {
@@ -859,7 +838,14 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
-	vec.ResetWithData(bs, v.Nsp.Np)
+	if v.Nsp.Np != nil {
+		np := &roaring64.Bitmap{}
+		np.AddMany(v.Nsp.Np.ToArray())
+		logutil.Infof("sie : %d", np.GetCardinality())
+		vec.ResetWithData(bs, np)
+		return vec
+	}
+	vec.ResetWithData(bs, nil)
 	return vec
 }
 
@@ -869,14 +855,16 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 	_, _ = w.Write(types.EncodeType(vec.GetType()))
 	if vec.HasNull() {
 		var nullBuf []byte
-		nullBuf, _ = vec.NullMask().ToBytes()
+		np := bitmap.New(vec.Length())
+		np.AddMany(vec.NullMask().ToArray())
+		nullBuf = np.Marshal()
 		_, _ = w.Write(types.EncodeFixed(uint32(len(nullBuf))))
 		_, _ = w.Write(nullBuf)
 	} else {
 		_, _ = w.Write(types.EncodeFixed(uint32(0)))
 	}
 	switch vec.GetType().Oid {
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		_, _ = w.Write(types.EncodeFixed(uint32(vec.Length())))
 		if vec.Length() > 0 {
 			bs := vec.Bytes()
@@ -900,7 +888,9 @@ func VectorsToMO(vec containers.Vector) *vector.Vector {
 	mov.Typ = typ
 	mov.Or = true
 	if vec.HasNull() {
-		mov.Nsp.Np = vec.NullMask()
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
 	}
 	mov.Data = data
 	switch vec.GetType().Oid {
@@ -944,7 +934,7 @@ func VectorsToMO(vec containers.Vector) *vector.Vector {
 		if err := encoding.Decode(data, &mov.Col); err != nil {
 			panic(any(err))
 		}
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON, types.Type_BLOB:
 		Col := mov.Col.(*types.Bytes)
 		Col.Reset()
 		bs := vec.Bytes()

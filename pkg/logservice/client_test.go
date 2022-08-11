@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +32,7 @@ import (
 )
 
 func runClientTest(t *testing.T,
-	readOnly bool, fn func(*testing.T, LogServiceClientConfig, Client)) {
+	readOnly bool, fn func(*testing.T, *Service, ClientConfig, Client)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -42,64 +44,177 @@ func runClientTest(t *testing.T,
 
 	init := make(map[uint64]string)
 	init[2] = service.ID()
-	assert.NoError(t, service.store.StartReplica(1, 2, init, false))
+	assert.NoError(t, service.store.startReplica(1, 2, init, false))
 
-	scfg := LogServiceClientConfig{
+	scfg := ClientConfig{
 		ReadOnly:         readOnly,
-		ShardID:          1,
-		ReplicaID:        2,
+		LogShardID:       1,
+		DNReplicaID:      2,
 		ServiceAddresses: []string{testServiceAddress},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	c, err := CreateClient(ctx, "shard1", scfg)
+	c, err := NewClient(ctx, scfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	fn(t, scfg, c)
+	fn(t, service, scfg, c)
+}
+
+func TestClientConfigIsValidated(t *testing.T) {
+	cfg := ClientConfig{}
+	cc, err := NewClient(context.TODO(), cfg)
+	assert.Nil(t, cc)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+}
+
+func TestClientCanBeReset(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		client := c.(*managedClient)
+		client.resetClient()
+		assert.Nil(t, client.client)
+	}
+	runClientTest(t, false, fn)
+}
+
+func TestPrepareClient(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		client := c.(*managedClient)
+		assert.NoError(t, client.prepareClient(ctx))
+		client.resetClient()
+		assert.Nil(t, client.client)
+		assert.NoError(t, client.prepareClient(ctx))
+		assert.NotNil(t, client.client)
+	}
+	runClientTest(t, false, fn)
+}
+
+func TestLogShardNotFoundErrorIsConsideredAsTempError(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		require.NoError(t, s.store.stopReplica(1, 2))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.GetTSOTimestamp(ctx, 100)
+		require.Equal(t, dragonboat.ErrShardNotFound, err)
+		assert.True(t, isTempError(err))
+		client := c.(*managedClient)
+		assert.True(t, client.isRetryableError(err))
+	}
+	runClientTest(t, false, fn)
 }
 
 func TestClientCanBeCreated(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 	}
 	runClientTest(t, false, fn)
 	runClientTest(t, true, fn)
 }
 
-func TestClientAppend(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewService(cfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
+	init := make(map[uint64]string)
+	init[2] = service.ID()
+	assert.NoError(t, service.store.startReplica(1, 2, init, false))
+
+	scfg := ClientConfig{
+		LogShardID:       1,
+		DNReplicaID:      2,
+		ServiceAddresses: []string{"localhost:53032"}, // unreachable
+		DiscoveryAddress: testServiceAddress,
+	}
+
+	done := false
+	for i := 0; i < 1000; i++ {
+		si, ok, err := GetShardInfo(testServiceAddress, 1)
+		if err != nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		done = true
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(2), si.ReplicaID)
+		addr, ok := si.Replicas[si.ReplicaID]
+		assert.True(t, ok)
+		assert.Equal(t, testServiceAddress, addr)
+		break
+	}
+	if !done {
+		t.Fatalf("failed to get shard info")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c, err := NewClient(ctx, scfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+}
+
+func TestClientGetTSOTimestamp(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		v, err := c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 1000)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(101), v)
+
+		v, err = c.GetTSOTimestamp(ctx, 100)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1101), v)
+	}
+	runClientTest(t, false, fn)
+}
+
+func TestClientAppend(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
-		lsn, err = c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err = c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
 
-		cmd = getAppendCmd(cmd, cfg.ReplicaID+1)
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.DNReplicaID+1)
 		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
 		assert.Equal(t, ErrNotLeaseHolder, err)
 	}
 	runClientTest(t, false, fn)
 }
 
+// FIXME: actually enforce allowed allocation
 func TestClientAppendAlloc(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ac := testing.AllocsPerRun(1000, func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)
 		})
 		plog.Infof("ac: %f", ac)
@@ -108,20 +223,18 @@ func TestClientAppendAlloc(t *testing.T) {
 }
 
 func TestClientRead(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
-		cmd2 := make([]byte, 16+headerSize+8)
-		cmd2 = getAppendCmd(cmd2, cfg.ReplicaID)
-		rand.Read(cmd2[headerSize+8:])
-		lsn, err = c.Append(ctx, pb.LogRecord{Data: cmd2})
+		rec2 := c.GetLogRecord(16)
+		rand.Read(rec2.Payload())
+		lsn, err = c.Append(ctx, rec2)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
 
@@ -130,8 +243,8 @@ func TestClientRead(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 		require.Equal(t, 2, len(recs))
-		assert.Equal(t, cmd, recs[0].Data)
-		assert.Equal(t, cmd2, recs[1].Data)
+		assert.Equal(t, rec.Data, recs[0].Data)
+		assert.Equal(t, rec2.Data, recs[1].Data)
 
 		_, _, err = c.Read(ctx, 6, math.MaxUint64)
 		assert.Equal(t, ErrOutOfRange, err)
@@ -140,34 +253,32 @@ func TestClientRead(t *testing.T) {
 }
 
 func TestClientTruncate(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		lsn, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		lsn, err := c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
 
 		require.NoError(t, c.Truncate(ctx, 4))
-		lsn, err = c.GetTruncatedIndex(ctx)
+		lsn, err = c.GetTruncatedLsn(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, Lsn(4), lsn)
 
-		assert.Equal(t, ErrInvalidTruncateIndex, c.Truncate(ctx, 3))
+		assert.Equal(t, ErrInvalidTruncateLsn, c.Truncate(ctx, 3))
 	}
 	runClientTest(t, false, fn)
 }
 
 func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
-	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.ReplicaID)
-		rand.Read(cmd[headerSize+8:])
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		_, err := c.Append(ctx, rec)
 		require.Equal(t, ErrIncompatibleClient, err)
 		require.Equal(t, ErrIncompatibleClient, c.Truncate(ctx, 4))
 	}

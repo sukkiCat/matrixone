@@ -65,7 +65,7 @@ func TestCreateDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -91,7 +91,7 @@ func TestCreateDB1(t *testing.T) {
 	txn2, _ := txnMgr.StartTxn(nil)
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
@@ -132,26 +132,28 @@ func TestCreateDB1(t *testing.T) {
 	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
 }
 
-//
 // TXN1-S     TXN2-S      TXN1-C  TXN3-S TXN4-S  TXN3-C TXN5-S
-//  |            |           |      |      |       |      |                                Time
+//
+//	|            |           |      |      |       |      |                                Time
+//
 // -+-+---+---+--+--+----+---+--+---+-+----+-+-----+------+-+------------------------------------>
-//    |   |   |     |    |      |     |      |              |
-//    |   |   |     |    |      |     |      |            [TXN5]: GET TBL [NOTFOUND]
-//    |   |   |     |    |      |     |    [TXN4]: GET TBL [OK] | DROP DB1-TB1 [W-W]
-//    |   |   |     |    |      |   [TXN3]: GET TBL [OK] | DROP DB1-TB1 [OK] | GET TBL [NOT FOUND]
-//    |   |   |     |    |    [TXN2]: DROP DB [NOTFOUND]
-//    |   |   |     |  [TXN2]: DROP DB [NOTFOUND]
-//    |   |   |   [TXN2]:  GET DB [NOTFOUND] | CREATE DB [W-W]
-//    |   | [TXN1]: CREATE DB1-TB1 [DUP]
-//    | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
-//  [TXN1]: CREATE DB1 [OK] | GET DB [OK]
+//
+//	  |   |   |     |    |      |     |      |              |
+//	  |   |   |     |    |      |     |      |            [TXN5]: GET TBL [NOTFOUND]
+//	  |   |   |     |    |      |     |    [TXN4]: GET TBL [OK] | DROP DB1-TB1 [W-W]
+//	  |   |   |     |    |      |   [TXN3]: GET TBL [OK] | DROP DB1-TB1 [OK] | GET TBL [NOT FOUND]
+//	  |   |   |     |    |    [TXN2]: DROP DB [NOTFOUND]
+//	  |   |   |     |  [TXN2]: DROP DB [NOTFOUND]
+//	  |   |   |   [TXN2]:  GET DB [NOTFOUND] | CREATE DB [W-W]
+//	  |   | [TXN1]: CREATE DB1-TB1 [DUP]
+//	  | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
+//	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -178,7 +180,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Equal(t, err, ErrNotFound)
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, err, txnif.TxnWWConflictErr)
+	assert.Equal(t, err, txnif.ErrTxnWWConflict)
 
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, err, ErrNotFound)
@@ -207,7 +209,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = db.DropRelationByName(schema.Name)
-	assert.Equal(t, txnif.TxnWWConflictErr, err)
+	assert.Equal(t, txnif.ErrTxnWWConflict, err)
 
 	err = txn3.Commit()
 	assert.Nil(t, err)
@@ -226,7 +228,7 @@ func TestTableEntry2(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
@@ -276,9 +278,7 @@ func TestTableEntry2(t *testing.T) {
 				} else {
 					// t.Logf("db-ttxn=%d, %v", ttxn.GetID(), err)
 					_, err := database.GetRelationByName(schema.Name)
-					if err != nil {
-						// t.Logf("rel-ttxn=%d, %s", ttxn.GetID(), err)
-					}
+					assert.NoError(t, err)
 				}
 			}
 		}(txn)
@@ -292,7 +292,7 @@ func TestDB1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -328,7 +328,7 @@ func TestTable1(t *testing.T) {
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
 
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db1"
@@ -339,21 +339,20 @@ func TestTable1(t *testing.T) {
 		txn, _ := txnMgr.StartTxn(nil)
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
-		rel, err := db.GetRelationByName(tbName)
+		_, err = db.GetRelationByName(tbName)
 		if err == ErrNotFound {
 			schema := MockSchema(1, 0)
 			schema.Name = tbName
-			if rel, err = db.CreateRelation(schema); err != nil {
+			if _, err = db.CreateRelation(schema); err != nil {
 				return
 			}
 		} else {
-			if rel, err = db.DropRelationByName(tbName); err != nil {
+			if _, err = db.DropRelationByName(tbName); err != nil {
 				return
 			}
 		}
 		err = txn.Commit()
 		assert.Nil(t, err)
-		assert.NotNil(t, rel)
 		// t.Log(rel.String())
 	}
 	{
@@ -377,7 +376,8 @@ func TestCommand(t *testing.T) {
 	name := "db"
 
 	db := NewDBEntry(catalog, name, nil)
-	db.CreateAt = common.NextGlobalSeqNum()
+	//db.CreateAt = common.NextGlobalSeqNum()
+	db.CreateAt = types.NextGlobalTsForTest()
 	db.CurrOp = OpCreate
 	db.ID = uint64(99)
 
@@ -400,7 +400,8 @@ func TestCommand(t *testing.T) {
 	assert.Equal(t, db.ID, eCmd.entry.ID)
 
 	db.CurrOp = OpSoftDelete
-	db.DeleteAt = common.NextGlobalSeqNum()
+	//db.DeleteAt = common.NextGlobalSeqNum()
+	db.DeleteAt = types.NextGlobalTsForTest()
 
 	cdb, err = db.MakeCommand(1)
 	assert.Nil(t, err)
@@ -421,7 +422,8 @@ func TestCommand(t *testing.T) {
 
 	schema := MockSchemaAll(13, 0)
 	tb := NewTableEntry(db, schema, nil, nil)
-	tb.CreateAt = common.NextGlobalSeqNum()
+	//tb.CreateAt = common.NextGlobalSeqNum()
+	tb.CreateAt = types.NextGlobalTsForTest()
 	tb.ID = common.NextGlobalSeqNum()
 
 	w.Reset()
@@ -442,7 +444,7 @@ func TestCommand(t *testing.T) {
 	assert.Equal(t, tb.GetSchema().Name, eCmd.Table.GetSchema().Name)
 	assert.Equal(t, tb.db.ID, eCmd.DBID)
 
-	tb.DeleteAt = common.NextGlobalSeqNum()
+	tb.DeleteAt = types.NextGlobalTsForTest()
 	tb.CurrOp = OpSoftDelete
 
 	cmd, err = tb.MakeCommand(3)
@@ -474,7 +476,7 @@ func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)
 	defer catalog.Close()
-	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()
 	defer txnMgr.Stop()
 	name := "db"

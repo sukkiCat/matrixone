@@ -43,6 +43,14 @@ const (
 	Saturday
 )
 
+// String returns the English name of the day ("Sunday", "Monday", ...).
+func (d Weekday) String() string {
+	if Sunday <= d && d <= Saturday {
+		return longDayNames[d]
+	}
+	return "%Weekday(" + strconv.FormatUint(uint64(d), 10) + ")"
+}
+
 var startupTime time.Time
 var localTZ int64
 var unixEpoch int64 // second unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
@@ -55,13 +63,13 @@ func init() {
 }
 
 var (
-	errIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
+	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date format")
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
-	errInvalidDateAddInterval = errors.New(errno.DataException, "Invalid date result")
+	ErrInvalidDateAddInterval = errors.New(errno.DataException, "Beyond the range of date")
 )
 
 const (
@@ -91,17 +99,17 @@ func ParseDate(s string) (Date, error) {
 	var m, d uint8
 
 	if len(s) < 8 {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 
 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
 		if len(s) < 8 || len(s) > 10 {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 		if len(s) == 8 {
 			if s[6] != '-' {
-				return -1, errIncorrectDateValue
+				return -1, ErrIncorrectDateValue
 			}
 			m = s[5] - '0'
 			d = s[7] - '0'
@@ -113,18 +121,18 @@ func ParseDate(s string) (Date, error) {
 				m = (s[5]-'0')*10 + (s[6] - '0')
 				d = s[8] - '0'
 			} else {
-				return -1, errIncorrectDateValue
+				return -1, ErrIncorrectDateValue
 			}
 		} else {
 			if s[7] != '-' {
-				return -1, errIncorrectDateValue
+				return -1, ErrIncorrectDateValue
 			}
 			m = (s[5]-'0')*10 + (s[6] - '0')
 			d = (s[8]-'0')*10 + (s[9] - '0')
 		}
 	} else {
 		if len(s) != 8 {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 		m = (s[4]-'0')*10 + (s[5] - '0')
 		d = (s[6]-'0')*10 + (s[7] - '0')
@@ -133,10 +141,10 @@ func ParseDate(s string) (Date, error) {
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
-	return -1, errIncorrectDateValue
+	return -1, ErrIncorrectDateValue
 }
 
-// ParseDate will parse a string to be a Date (this is used for cast string to date,it's different from above)
+// ParseDateCast will parse a string to be a Date (this is used for cast string to date,it's different from above)
 // Support Format: we exchange '.' with '-' anyway.
 // `yyyy-mm-dd`
 // `yyyymmdd`
@@ -150,14 +158,14 @@ func ParseDateCast(s string) (Date, error) {
 	//special case
 	flag_spcial, _ := regexp.MatchString("^[0-9]{4}[.|-]{1}[0-9]{2}$", s)
 	if flag_spcial {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 	//if it's pure number series like yyyymmdd,it must be 8 or 6 digits, otherwise there will be obfuscate
 	flag1, _ := regexp.MatchString("^[0-9]{4}[0-9]{1,2}[0-9]{1,2}$", s)
 	//the reg rule test: here refers to https://regex101.com/r/NlaiAo/1
 	flag2, _ := regexp.MatchString("^[0-9]{4}[.|-]{0,1}[0-9]{1,2}[.|-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
 	if !flag2 {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if flag1 {
@@ -168,7 +176,7 @@ func ParseDateCast(s string) (Date, error) {
 			m = (s[4] - '0')
 			d = (s[5] - '0')
 		} else {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 	} else {
 		// if len(s) < 8 {
@@ -200,7 +208,7 @@ func ParseDateCast(s string) (Date, error) {
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
-	return -1, errIncorrectDateValue
+	return -1, ErrIncorrectDateValue
 }
 
 // date[0001-01-01 to 9999-12-31]
@@ -224,7 +232,7 @@ func (d Date) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, day)
 }
 
-// Holds number of days since January 1, year 1 in Gregorian calendar
+// Today Holds number of days since January 1, year 1 in Gregorian calendar
 func Today() Date {
 	sec := Now().sec()
 	return Date((sec + localTZ) / secsPerDay)
@@ -319,7 +327,7 @@ func (d Date) YearMonthStr() string {
 	year, month, _, _ := d.Calendar(true)
 	yearStr := fmt.Sprintf("%04d", year)
 	monthStr := fmt.Sprintf("%02d", month)
-	return yearStr + "-" + monthStr
+	return yearStr + monthStr
 }
 
 var monthToQuarter = map[uint8]uint32{
@@ -470,11 +478,13 @@ func daysSinceEpoch(year int32) int32 {
 	return d
 }
 
+// DayOfWeek return the day of the week of the date
 func (d Date) DayOfWeek() Weekday {
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday((d + 1) % 7)
 }
 
+// DayOfYear return day of year (001..366)
 func (d Date) DayOfYear() uint16 {
 	_, _, _, yday := d.Calendar(false)
 	return yday
@@ -522,6 +532,136 @@ func (d Date) WeekOfYear2() uint8 {
 	d = Date(int32(d) + delta)
 	_, _, _, yday := d.Calendar(false)
 	return uint8((yday-1)/7 + 1)
+}
+
+type weekBehaviour uint
+
+const (
+	// WeekMondayFirst: set Monday as first day of week; otherwise Sunday is first day of week
+	WeekMondayFirst weekBehaviour = 1
+
+	// WeekYear: If set, Week is in range 1-53, otherwise Week is in range 0-53.
+	//	Week 0 is returned for the the last week of the previous year (for
+	// a date at start of january) In this case one can get 53 for the
+	// first week of next year.  This flag ensures that the week is
+	// relevant for the given year. Note that this flag is only
+	// releveant if WEEK_JANUARY is not set.
+	WeekYear = 2
+
+	//WeekFirstWeekday: If not set, Weeks are numbered according to ISO 8601:1988.
+	// If set, the week that contains the first 'first-day-of-week' is week 1.
+	// ISO 8601:1988 means that if the week containing January 1 has
+	// four or more days in the new year, then it is week 1;
+	// Otherwise it is the last week of the previous year, and the next week is week 1.
+	WeekFirstWeekday = 4
+)
+
+func (v weekBehaviour) bitAnd(flag weekBehaviour) bool {
+	return (v & flag) != 0
+}
+
+func weekMode(mode int) weekBehaviour {
+	weekFormat := weekBehaviour(mode & 7)
+	if (weekFormat & WeekMondayFirst) == 0 {
+		weekFormat ^= WeekFirstWeekday
+	}
+	return weekFormat
+}
+
+// Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
+// Week (00..53), where Monday is the first day of the week; WEEK() mode 1
+func (d Date) Week(mode int) int {
+	if d.Month() == 0 || d.Day() == 0 {
+		return 0
+	}
+	_, week := calcWeek(d, weekMode(mode))
+	return week
+}
+
+// YearWeek returns year and week.
+func (d Date) YearWeek(mode int) (year int, week int) {
+	behavior := weekMode(mode) | WeekYear
+	return calcWeek(d, behavior)
+}
+
+// calcWeek calculates week and year for the date.
+func calcWeek(d Date, wb weekBehaviour) (year int, week int) {
+	var days int
+	ty, tm, td := int(d.Year()), int(d.Month()), int(d.Day())
+	daynr := calcDaynr(ty, tm, td)
+	firstDaynr := calcDaynr(ty, 1, 1)
+	mondayFirst := wb.bitAnd(WeekMondayFirst)
+	weekYear := wb.bitAnd(WeekYear)
+	firstWeekday := wb.bitAnd(WeekFirstWeekday)
+
+	weekday := calcWeekday(firstDaynr, !mondayFirst)
+
+	year = ty
+
+	if tm == 1 && td <= 7-weekday {
+		if !weekYear &&
+			((firstWeekday && weekday != 0) || (!firstWeekday && weekday >= 4)) {
+			week = 0
+			return
+		}
+		weekYear = true
+		year--
+		days = calcDaysInYear(year)
+		firstDaynr -= days
+		weekday = (weekday + 53*7 - days) % 7
+	}
+
+	if (firstWeekday && weekday != 0) ||
+		(!firstWeekday && weekday >= 4) {
+		days = daynr - (firstDaynr + 7 - weekday)
+	} else {
+		days = daynr - (firstDaynr - weekday)
+	}
+
+	if weekYear && days >= 52*7 {
+		weekday = (weekday + calcDaysInYear(year)) % 7
+		if (!firstWeekday && weekday < 4) ||
+			(firstWeekday && weekday == 0) {
+			year++
+			week = 1
+			return
+		}
+	}
+	week = days/7 + 1
+	return
+}
+
+// calcWeekday calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday
+func calcWeekday(daynr int, sundayFirstDayOfWeek bool) int {
+	daynr += 5
+	if sundayFirstDayOfWeek {
+		daynr++
+	}
+	return daynr % 7
+}
+
+// Calculate nr of day since year 0 in new date-system (from 1615).
+func calcDaynr(year, month, day int) int {
+	if year == 0 && month == 0 {
+		return 0
+	}
+
+	delsum := 365*year + 31*(month-1) + day
+	if month <= 2 {
+		year--
+	} else {
+		delsum -= (month*4 + 23) / 10
+	}
+	temp := ((year/100 + 1) * 3) / 4
+	return delsum + year/4 - temp
+}
+
+// calcDaysInYear calculates days in one year, it works with 0 <= year <= 99.
+func calcDaysInYear(year int) int {
+	if (year&3) == 0 && (year%100 != 0 || (year%400 == 0 && (year != 0))) {
+		return 366
+	}
+	return 365
 }
 
 func isLeap(year int32) bool {

@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package memEngine
 
 import (
@@ -7,9 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func (r *reader) Read(cs []uint64, attrs []string) (*batch.Batch, error) {
+func (r *reader) Close() error {
+	return nil
+}
+
+func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
 	if len(r.segs) == 0 {
 		return nil, nil
 	}
@@ -38,7 +58,6 @@ func (r *reader) Read(cs []uint64, attrs []string) (*batch.Batch, error) {
 				return nil, err
 			}
 			bat.Vecs[i].Or = true
-			bat.Vecs[i].Ref = cs[i]
 		} else {
 			data, err := r.db.Get(id+"."+attr, r.cds[i])
 			if err != nil {
@@ -60,14 +79,15 @@ func (r *reader) Read(cs []uint64, attrs []string) (*batch.Batch, error) {
 				return nil, err
 			}
 			bat.Vecs[i].Or = true
-			bat.Vecs[i].Ref = cs[i]
 		}
 	}
 	n := vector.Length(bat.Vecs[0])
-	if n > cap(r.zs) {
-		r.zs = make([]int64, n*2)
+	sels := m.GetSels()
+	if n > cap(sels) {
+		m.PutSels(sels)
+		sels = make([]int64, n)
 	}
-	bat.Zs = r.zs[:n]
+	bat.Zs = sels[:n]
 	for i := 0; i < n; i++ {
 		bat.Zs[i] = 1
 	}

@@ -16,7 +16,7 @@ package util
 
 // IDAllocator is used to fetch new replica ID.
 type IDAllocator interface {
-	// When IDAllocator was exhaused temporarily, return `false`.
+	// Next returns `false` when IDAllocator was exhausted temporarily.
 	Next() (uint64, bool)
 }
 
@@ -28,36 +28,41 @@ func NewTestIDAllocator(startFrom uint64) *TestIDAllocator {
 	return &TestIDAllocator{id: startFrom}
 }
 
-func (a TestIDAllocator) Next() (uint64, bool) {
+func (a *TestIDAllocator) Next() (uint64, bool) {
 	a.id += 1
 	return a.id, true
 }
 
-type StoreID string
-
-const (
-	NullStoreID = StoreID("")
-)
-
 // Store records metadata for dn store.
 type Store struct {
-	ID       StoreID
+	ID       string
 	Length   int
 	Capacity int
 }
 
 func NewStore(storeID string, length int, capacity int) *Store {
 	return &Store{
-		ID:       StoreID(storeID),
+		ID:       storeID,
 		Length:   length,
 		Capacity: capacity,
 	}
 }
 
+type StoreSlice []*Store
+
+func (ss StoreSlice) Contains(storeID string) bool {
+	for _, s := range ss {
+		if storeID == s.ID {
+			return true
+		}
+	}
+	return false
+}
+
 // ClusterStores collects stores by their status.
 type ClusterStores struct {
-	Working []*Store
-	Expired []*Store
+	Working StoreSlice
+	Expired StoreSlice
 }
 
 func NewClusterStores() *ClusterStores {
@@ -76,12 +81,12 @@ func (cs *ClusterStores) RegisterExpired(store *Store) {
 
 // WorkingStores returns all recorded working stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) WorkingStores() []*Store {
+func (cs *ClusterStores) WorkingStores() StoreSlice {
 	return cs.Working
 }
 
 // ExpiredStores returns all recorded expired stores.
 // NB: the returned order isn't deterministic.
-func (cs *ClusterStores) ExpiredStores() []*Store {
+func (cs *ClusterStores) ExpiredStores() StoreSlice {
 	return cs.Expired
 }

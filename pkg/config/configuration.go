@@ -15,7 +15,6 @@
 package config
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -23,56 +22,17 @@ import (
 
 var GlobalSystemVariables SystemVariables
 
-//host memory
+// HostMmu host memory
 var HostMmu *host.Mmu = nil
 
-//mempool
+// Mempool memory pool
 var Mempool *mempool.Mempool = nil
 
-//Storage Engine
+// StorageEngine Storage Engine
 var StorageEngine engine.Engine
 
-//Cluster Nodes
+// ClusterNodes Cluster Nodes
 var ClusterNodes engine.Nodes
-
-//cube catalog
-var ClusterCatalog *catalog.Catalog
-
-/**
-check if x in a slice
-*/
-func isInSlice(x string, arr []string) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceBool(x bool, arr []bool) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceInt64(x int64, arr []int64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
 
 type ParameterUnit struct {
 	SV *SystemVariables
@@ -88,18 +48,14 @@ type ParameterUnit struct {
 
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
-
-	//Cube Catalog
-	ClusterCatalog *catalog.Catalog
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes, catalogRef *catalog.Catalog) *ParameterUnit {
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes) *ParameterUnit {
 	return &ParameterUnit{
-		SV:             sv,
-		HostMmu:        hostMmu,
-		Mempool:        mempool,
-		StorageEngine:  storageEngine,
-		ClusterNodes:   clusterNodes,
-		ClusterCatalog: catalogRef,
+		SV:            sv,
+		HostMmu:       hostMmu,
+		Mempool:       mempool,
+		StorageEngine: storageEngine,
+		ClusterNodes:  clusterNodes,
 	}
 }

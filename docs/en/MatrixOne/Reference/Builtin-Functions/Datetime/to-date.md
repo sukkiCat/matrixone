@@ -2,7 +2,7 @@
 
 ## **Description**
 
-``STR_TO_DATE()`` returns a DATETIME value if the format string contains both date and time parts, or a DATE or TIME value if the string contains only date or time parts.
+``TO_DATE()`` returns a DATETIME value if the format string contains both date and time parts, or a DATE or TIME value if the string contains only date or time parts.
 
 ## **Syntax**
 
@@ -34,5 +34,3 @@
 ## **Constraints**
 
 The date type supports only `yyyy-mm-dd` and `yyyymmdd` for now.
-
-Currently, MatrixOne doesn't support select function() without from tables.

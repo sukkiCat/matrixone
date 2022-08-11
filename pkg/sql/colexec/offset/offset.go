@@ -17,57 +17,55 @@ package offset
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	n := arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	bat := proc.InputBatch()
+	if bat == nil {
+		return true, nil
+	}
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	if n.Seen > n.Offset {
+	ap := arg.(*Argument)
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(bat)
+	if ap.Seen > ap.Offset {
 		return false, nil
 	}
-	length := len(bat.Zs)
-	if n.Seen+uint64(length) > n.Offset {
-		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc.Mp)
-		if err != nil {
-			batch.Clean(bat, proc.Mp)
-			return false, err
-		}
-		n.Seen += uint64(length)
-		batch.Shrink(bat, sels)
-		mheap.Free(proc.Mp, data)
-		proc.Reg.InputBatch = bat
+	length := bat.Length()
+	if ap.Seen+uint64(length) > ap.Offset {
+		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
+		ap.Seen += uint64(length)
+		bat.Shrink(sels)
+		proc.GetMheap().PutSels(sels)
+		proc.SetInputBatch(bat)
 		return false, nil
 	}
-	n.Seen += uint64(length)
-	batch.Clean(bat, proc.Mp)
-	proc.Reg.InputBatch = &batch.Batch{}
+	ap.Seen += uint64(length)
+	bat.Clean(proc.Mp)
+	proc.SetInputBatch(&batch.Batch{})
 	return false, nil
 }
 
-func newSels(start, count int64, mp *mheap.Mheap) ([]byte, []int64, error) {
-	data, err := mheap.Alloc(mp, count*8)
-	if err != nil {
-		return nil, nil, err
-	}
-	sels := encoding.DecodeInt64Slice(data)
+func newSels(start, count int64, proc *process.Process) []int64 {
+	sels := proc.GetMheap().GetSels()
 	for i := int64(0); i < count; i++ {
-		sels[i] = start + i
+		sels = append(sels, start+i)
 	}
-	return data, sels[:count], nil
+	return sels[:count]
 }

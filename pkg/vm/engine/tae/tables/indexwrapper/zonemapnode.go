@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package indexwrapper
 
 import (
@@ -16,9 +30,10 @@ type zonemapNode struct {
 	mgr     base.INodeManager
 	file    common.IVFile
 	zonemap *index.ZoneMap
+	dataTyp types.Type
 }
 
-func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *zonemapNode {
+func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *zonemapNode {
 	impl := new(zonemapNode)
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
@@ -26,6 +41,7 @@ func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *z
 	impl.DestroyFunc = impl.OnDestroy
 	impl.file = file
 	impl.mgr = mgr
+	impl.dataTyp = typ
 	mgr.RegisterNode(impl)
 	return impl
 }
@@ -48,7 +64,8 @@ func (n *zonemapNode) OnLoad() {
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
-	n.zonemap, err = index.LoadZoneMapFrom(buf)
+	n.zonemap = index.NewZoneMap(n.dataTyp)
+	err = n.zonemap.Unmarshal(buf)
 	if err != nil {
 		panic(err)
 	}
@@ -78,9 +95,9 @@ type ZMReader struct {
 	node *zonemapNode
 }
 
-func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *ZMReader {
+func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *ZMReader {
 	return &ZMReader{
-		node: newZonemapNode(mgr, file, id),
+		node: newZonemapNode(mgr, file, id, typ),
 	}
 }
 

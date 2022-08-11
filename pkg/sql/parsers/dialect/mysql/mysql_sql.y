@@ -147,6 +147,7 @@ import (
     fieldsList []*tree.Fields
     lines *tree.Lines
     varExpr *tree.VarExpr
+    varExprs []*tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     assignments []*tree.Assignment
@@ -162,12 +163,23 @@ import (
     withClause *tree.With
     cte *tree.CTE
     cteList []*tree.CTE
+
+    accountAuthOption tree.AccountAuthOption
+    accountIdentified tree.AccountIdentified
+    accountStatus tree.AccountStatus
+    accountComment tree.AccountComment
+    accountCommentOrAttribute tree.AccountCommentOrAttribute
+    userIdentified *tree.AccountIdentified
+    accountRole *tree.Role
 }
 
 %token LEX_ERROR
-%left <str> UNION
+%nonassoc EMPTY
+%left <str> UNION EXCEPT INTERSECT MINUS
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT SET LOCK KEYS
+%nonassoc LOWER_THAN_SET
+%nonassoc <str> SET
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -182,7 +194,7 @@ import (
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR
+%left <str> OR PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -202,7 +214,7 @@ import (
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
-%token <str> CHAIN NO RELEASE
+%token <str> CHAIN NO RELEASE PRIORITY QUICK
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
@@ -216,6 +228,7 @@ import (
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
+%token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
@@ -229,6 +242,7 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 %token <str> TYPE ANY SOME
+%token <str> PREPARE DEALLOCATE
 
 // MO table option
 %token <str> PROPERTIES
@@ -251,6 +265,9 @@ import (
 // Type Modifiers
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL
 
+// Account
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
+
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
@@ -262,11 +279,11 @@ import (
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES
+%token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
-%token <str> LOCAL EXCEPT
+%token <str> LOCAL
 
 // Functions
 %token <str> CURRENT_TIMESTAMP DATABASE
@@ -295,6 +312,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
+//JSON function
+%token <str> JSON_EXTRACT
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -303,28 +323,30 @@ import (
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt
-%type <statement> drop_role_stmt drop_user_stmt
-%type <statement> create_user_stmt create_role_stmt
+%type <statement> delete_without_using_stmt delete_with_using_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
+%type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
+%type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> alter_user_stmt update_stmt use_stmt
+%type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <statement> analyze_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
-%type <tableExprs> table_references
-%type <tableExpr> table_reference table_factor join_table into_table_name
+%type <tableExprs> table_references table_name_wild_list
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -335,10 +357,10 @@ import (
 
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem
-%type <tableName> table_name
+%type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
-%type <columnType> cast_type
+%type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
@@ -365,6 +387,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
+%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -373,7 +396,7 @@ import (
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
-%type <str> database_id table_alias explain_sym
+%type <str> database_id table_alias explain_sym prepare_sym deallocate_sym stmt_name
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
@@ -406,14 +429,13 @@ import (
 %type <role> role_spec
 %type <str> role_name
 %type <usernameRecord> user_name
-%type <authRecord> auth_option
-%type <user> user_spec
-%type <users> user_spec_list
-%type <tlsOptions> require_clause_opt require_clause require_list
-%type <tlsOption> require_elem
-%type <resourceOptions> conn_option_list conn_options
-%type <resourceOption> conn_option
-%type <updateExpr> update_expression
+%type <user> user_spec drop_user_spec
+%type <users> user_spec_list drop_user_spec_list
+//%type <tlsOptions> require_clause_opt require_clause require_list
+//%type <tlsOption> require_elem
+//%type <resourceOptions> conn_option_list conn_options
+//%type <resourceOption> conn_option
+%type <updateExpr> update_value
 %type <updateExprs> update_list
 %type <completionType> completion_type
 %type <str> password_opt
@@ -466,6 +488,7 @@ import (
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
+%type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
 %type <unresolvedName> normal_ident
@@ -491,6 +514,16 @@ import (
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key select_option_opt
 %type <str> explain_foramt_value view_recursive_opt trim_direction
+%type <str> priority_opt priority quick_opt ignore_opt wild_opt
+
+%type <str> account_name account_admin_name account_role_name
+%type <accountAuthOption> account_auth_option
+%type <accountIdentified> account_identified
+%type <accountStatus> account_status_option
+%type <accountComment> account_comment_opt
+%type <accountCommentOrAttribute> user_comment_or_attribute_opt
+%type <userIdentified> user_identified_opt
+%type <accountRole> default_role_opt
 
 %start start_command
 
@@ -519,6 +552,9 @@ stmt:
 |   delete_stmt
 |   drop_stmt
 |   explain_stmt
+|   prepare_stmt
+|   deallocate_stmt
+|   execute_stmt
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
@@ -644,6 +680,16 @@ columns_or_variable:
 |   user_variable
     {
         $$ = $1
+    }
+
+variable_list:
+    variable
+    {
+        $$ = []*tree.VarExpr{$1}
+    }
+|   variable_list ',' variable
+    {
+        $$ = append($1, $3)
     }
 
 variable:
@@ -864,32 +910,41 @@ local_opt:
     }
 
 grant_stmt:
-    GRANT priv_list ON object_type priv_level TO user_spec_list require_clause_opt grant_option_opt
+    GRANT priv_list ON object_type priv_level TO role_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
-            Privileges: $2,
-            ObjType: $4,
-            Level: $5,
-            Users: $7,
-            GrantOption: $9,
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+	    	ObjType: $4,
+	    	Level: $5,
+	    	Roles: $7,
+	    	GrantOption: $8,
+            },
         }
     }
-|   GRANT role_spec_list TO user_spec_list
+|   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
-            IsGrantRole: true,
-            RolesInGrantRole: $2,
-            Users: $4,
-        }
+                 Typ: tree.GrantTypeRole,
+                 GrantRole:tree.GrantRole{
+		       Roles: $2,
+		       Users: $4,
+		       GrantOption: $5,
+		   },
+             }
     }
 |   GRANT PROXY ON user_spec TO user_spec_list grant_option_opt
     {
-        $$ = &tree.Grant{
-            IsProxy: true,
-            ProxyUser: $4,
-            Users: $6,
-            GrantOption: $7,
-        }
+        $$ =  &tree.Grant{
+	      Typ: tree.GrantTypeProxy,
+	      GrantProxy:tree.GrantProxy{
+		     ProxyUser: $4,
+		     Users: $6,
+		     GrantOption: $7,
+		 },
+	  }
+
     }
 
 grant_option_opt:
@@ -906,22 +961,28 @@ grant_option_opt:
 // |	WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
-    REVOKE priv_list ON object_type priv_level FROM user_spec_list
+    REVOKE exists_opt  priv_list ON object_type priv_level FROM user_spec_list
     {
         $$ = &tree.Revoke{
-            Privileges: $2,
-            ObjType: $4,
-            Level: $5,
-            Users: $7,
-            Roles: nil,
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+		    IfExists: $2,
+		    Privileges: $3,
+		    ObjType: $5,
+		    Level: $6,
+		    Users: $8,
+            },
         }
     }
-|   REVOKE role_spec_list FROM user_spec_list
+|   REVOKE exists_opt role_spec_list FROM user_spec_list
     {
         $$ = &tree.Revoke{
-            IsRevokeRole: true,
-            RolesInRevokeRole: $2,
-            Users: $4,
+            Typ: tree.RevokeTypeRole,
+            RevokeRole: tree.RevokeRole{
+		IfExists: $2,
+		Roles: $3,
+                Users: $5,
+            },
         }
     }
 
@@ -929,26 +990,26 @@ priv_level:
     '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
         }
     }
 |   '*' '.' '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_GLOBAL,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
         }
     }
 |   ID '.' '*'
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
             DbName: $1,
         }
     }
 |   ID '.' ID
     {
         $$ = &tree.PrivilegeLevel{
-            Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
             DbName: $1,
             TabName: $3,
         }
@@ -969,6 +1030,10 @@ object_type:
     {
         $$ = tree.OBJECT_TYPE_TABLE
     }
+|   DATABASE
+    {
+        $$ = tree.OBJECT_TYPE_DATABASE
+    }
 |   FUNCTION
     {
         $$ = tree.OBJECT_TYPE_FUNCTION
@@ -976,6 +1041,10 @@ object_type:
 |   PROCEDURE
     {
         $$ = tree.OBJECT_TYPE_PROCEDURE
+    }
+|   VIEW
+    {
+        $$ = tree.OBJECT_TYPE_VIEW
     }
 
 priv_list:
@@ -1473,40 +1542,121 @@ begin_stmt:
 use_stmt:
     USE ident
     {
-        $$ = &tree.Use{Name: $2}
+        $$ = &tree.Use{
+        	SecondaryRole: false,
+        	Name: $2,
+        }
     }
 |   USE
     {
-        $$ = &tree.Use{}
+        $$ = &tree.Use{
+        	SecondaryRole: false,
+        }
+    }
+|   USE ROLE role_spec
+    {
+	$$ = &tree.Use{
+		SecondaryRole: false,
+		Role: $3,
+	}
+    }
+|   USE SECONDARY ROLE ALL
+    {
+	$$ = &tree.Use{
+		SecondaryRole: true,
+		SecondaryRoleType: tree.SecondaryRoleTypeAll,
+	}
+    }
+|   USE SECONDARY ROLE NONE
+    {
+	$$ = &tree.Use{
+		SecondaryRole: true,
+		SecondaryRoleType: tree.SecondaryRoleTypeNone,
+	}
     }
 
 update_stmt:
-    UPDATE table_reference SET update_list where_expression_opt order_by_opt limit_opt
+	update_no_with_stmt
+|	with_clause update_no_with_stmt
+	{
+		$2.(*tree.Update).With = $1
+		$$ = $2
+	}
+
+update_no_with_stmt:
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
     {
+    	// Single-table syntax
         $$ = &tree.Update{
-            Table: $2,
-            Exprs: $4,
-            Where: $5,
-            OrderBy: $6,
-            Limit: $7,
+            Tables: tree.TableExprs{$4},
+            Exprs: $6,
+            Where: $7,
+            OrderBy: $8,
+            Limit: $9,
         }
     }
-// |   UPDATE comment_opt ignore_opt table_references SET update_list where_expression_opt order_by_opt limit_opt 
+|	UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+	{
+		// Multiple-table syntax
+		$$ = &tree.Update{
+			Tables: $4,
+			Exprs: $6,
+			Where: $7,
+		}
+	}
 
 update_list:
-    update_expression
+    update_value
     {
         $$ = tree.UpdateExprs{$1}
     }
-|   update_list ',' update_expression
+|   update_list ',' update_value
     {
         $$ = append($1, $3)
     }
 
-update_expression:
-    column_name '=' expression
+update_value:
+    column_name '=' expr_or_default
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
+    }
+
+prepareable_stmt:
+    create_stmt
+|   insert_stmt
+|   delete_stmt
+|   drop_stmt
+|   show_stmt
+|   update_stmt
+|   select_stmt
+    {
+        $$ = $1
+    }
+
+prepare_stmt:
+    prepare_sym stmt_name FROM prepareable_stmt
+    {
+        $$ = tree.NewPrepareStmt(tree.Identifier($2), $4)
+    }
+|   prepare_sym stmt_name FROM STRING
+    {
+        $$ = tree.NewPrepareString(tree.Identifier($2), $4)
+    }
+
+execute_stmt:
+    execute_sym stmt_name
+    {
+        $$ = tree.NewExecute(tree.Identifier($2))
+    }
+|   execute_sym stmt_name USING variable_list
+    {
+        $$ = tree.NewExecuteWithVariables(tree.Identifier($2), $4)
+    }
+
+deallocate_stmt:
+    deallocate_sym PREPARE stmt_name
+    {
+        $$ = tree.NewDeallocate(tree.Identifier($3), false)
     }
 
 explainable_stmt:
@@ -1521,13 +1671,11 @@ explainable_stmt:
 explain_stmt:
     explain_sym unresolved_object_name
     {
-        st := &tree.ShowColumns{Table: $2}
-        $$ = tree.NewExplainStmt(st, "")
+        $$ = &tree.ShowColumns{Table: $2}
     }
 |   explain_sym unresolved_object_name column_name
     {
-        st := &tree.ShowColumns{Table: $2, ColName: $3}
-        $$ = tree.NewExplainStmt(st, "")
+        $$ = &tree.ShowColumns{Table: $2, ColName: $3}
     }
 |   explain_sym FOR CONNECTION INTEGRAL
     {
@@ -1584,6 +1732,15 @@ explain_foramt_value:
 |   TEXT
 
 
+prepare_sym:
+    PREPARE
+
+deallocate_sym:
+    DEALLOCATE
+
+execute_sym:
+    EXECUTE
+
 explain_sym:
     EXPLAIN
 |   DESCRIBE
@@ -1625,31 +1782,40 @@ analyze_stmt:
 
 alter_stmt:
     alter_user_stmt
+|   alter_account_stmt
 // |    alter_ddl_stmt
 
+alter_account_stmt:
+    ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
+    {
+	$$ = &tree.AlterAccount{
+		IfExists:$3,
+		Name:$4,
+		AuthOption:$5,
+		StatusOption:$6,
+		Comment:$7,
+	}
+    }
+
 alter_user_stmt:
-    ALTER USER exists_opt user_spec_list require_clause_opt conn_options pwd_or_lck_opt
+    ALTER USER exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.AlterUser{
             IfExists: $3,
-            IsUserFunc: false,
             Users: $4,
-            TlsOpts: $5,
-            ResOpts: $6,
-            MiscOpts: $7,
+            Role: $5,
+            MiscOpts: $6,
+            CommentOrAttribute: $7,
         }
     }
-|   ALTER USER exists_opt USER '(' ')' IDENTIFIED BY auth_string
+
+default_role_opt:
     {
-        auth := &tree.User{
-            AuthString: $9,
-            ByAuth: true,
-        }
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            IsUserFunc: true,
-            UserFunc: auth,
-        }
+        $$ = nil
+    }
+|   DEFAULT ROLE account_role_name
+    {
+        $$ = &tree.Role{UserName:$3}
     }
 
 exists_opt:
@@ -1681,11 +1847,11 @@ pwd_or_lck_list:
     }
 
 pwd_or_lck:
-    ACCOUNT UNLOCK
+    UNLOCK
     {
         $$ = &tree.UserMiscOptionAccountUnlock{}
     }
-|   ACCOUNT LOCK
+|   LOCK
     {
         $$ = &tree.UserMiscOptionAccountLock{}
     }
@@ -1704,6 +1870,46 @@ pwd_or_lck:
 |   pwd_expire DEFAULT
     {
         $$ = &tree.UserMiscOptionPasswordExpireDefault{}
+    }
+|   PASSWORD HISTORY DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordHistoryDefault{}
+    }
+|   PASSWORD HISTORY INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionPasswordHistoryCount{Value: $3.(int64)}
+    }
+|   PASSWORD REUSE INTERVAL DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordReuseIntervalDefault{}
+    }
+|   PASSWORD REUSE INTERVAL INTEGRAL DAY
+    {
+        $$ = &tree.UserMiscOptionPasswordReuseIntervalCount{Value: $4.(int64)}
+    }
+|   PASSWORD REQUIRE CURRENT
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentNone{}
+    }
+|   PASSWORD REQUIRE CURRENT DEFAULT
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentDefault{}
+    }
+|   PASSWORD REQUIRE CURRENT OPTIONAL
+    {
+        $$ = &tree.UserMiscOptionPasswordRequireCurrentOptional{}
+    }
+|   FAILED_LOGIN_ATTEMPTS INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionFailedLoginAttempts{Value: $2.(int64)}
+    }
+|   PASSWORD_LOCK_TIME INTEGRAL
+    {
+        $$ = &tree.UserMiscOptionPasswordLockTimeCount{Value: $2.(int64)}
+    }
+|   PASSWORD_LOCK_TIME UNBOUNDED
+    {
+        $$ = &tree.UserMiscOptionPasswordLockTimeUnbounded{}
     }
 
 pwd_expire:
@@ -1835,6 +2041,10 @@ show_databases_stmt:
     {
         $$ = &tree.ShowDatabases{Like: $3, Where: $4}
     }
+|   SHOW SCHEMAS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowDatabases{Like: $3, Where: $4}
+    }
 
 show_columns_stmt:
     SHOW full_opt fields_or_columns table_column_name database_name_opt like_opt where_expression_opt
@@ -1945,17 +2155,47 @@ drop_stmt:
 
 drop_ddl_stmt:
     drop_database_stmt
+|   drop_prepare_stmt
 |   drop_table_stmt
 |   drop_index_stmt
 |   drop_role_stmt
 |   drop_user_stmt
+|   drop_account_stmt
+
+drop_account_stmt:
+    DROP ACCOUNT exists_opt account_name
+    {
+        $$ = &tree.DropAccount{
+        	IfExists: $3,
+        	Name: $4,
+        }
+    }
 
 drop_user_stmt:
-    DROP USER exists_opt user_spec_list
+    DROP USER exists_opt drop_user_spec_list
     {
         $$ = &tree.DropUser{
             IfExists: $3,
             Users: $4,
+        }
+    }
+
+drop_user_spec_list:
+    drop_user_spec
+    {
+        $$ = []*tree.User{$1}
+    }
+|   drop_user_spec_list ',' drop_user_spec
+    {
+        $$ = append($1, $3)
+    }
+
+drop_user_spec:
+    user_name
+    {
+        $$ = &tree.User{
+            Username: $1.Username,
+            Hostname: $1.Hostname,
         }
     }
 
@@ -1990,20 +2230,110 @@ drop_database_stmt:
         $$ = &tree.DropDatabase{Name: tree.Identifier($4), IfExists: $3}
     }
 
-delete_stmt:
-    DELETE FROM table_reference where_expression_opt order_by_opt limit_opt
+drop_prepare_stmt:
+    DROP PREPARE stmt_name
     {
+        $$ = tree.NewDeallocate(tree.Identifier($3), true)
+    }
+
+delete_stmt:
+	delete_without_using_stmt
+|	delete_with_using_stmt
+|	with_clause delete_with_using_stmt
+	{
+		$2.(*tree.Delete).With = $1
+		$$ = $2
+	}
+|	with_clause delete_without_using_stmt
+	{
+    	$2.(*tree.Delete).With = $1
+        $$ = $2
+    }
+
+delete_without_using_stmt:
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
+    {
+    	// Single-Table Syntax
+    	t := &tree.AliasedTableExpr {
+    		Expr: $6,
+    		As: tree.AliasClause{
+    			Alias: tree.Identifier($8),
+    		},
+    	}
         $$ = &tree.Delete{
-            Table: $3,
-            Where: $4,
-            OrderBy: $5,
-            Limit: $6,
+            Tables: tree.TableExprs{t},
+            Where: $9,
+            OrderBy: $10,
+            Limit: $11,
         }
     }
-//     DELETE comment_opt ignore_opt FROM table_name partition_clause_opt where_expression_opt order_by_opt limit_opt
-// |   DELETE comment_opt ignore_opt FROM table_name_list USING table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt table_name_list from_or_using table_references where_expression_opt
-// |   DELETE comment_opt ignore_opt delete_table_list from_or_using table_references where_expression_opt
+|	DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $5,
+			Where: $8,
+			TableRefs: $7,
+		}
+	}
+
+
+
+delete_with_using_stmt:
+	DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+	{
+		// Multiple-Table Syntax
+		$$ = &tree.Delete{
+			Tables: $6,
+			Where: $9,
+			TableRefs: $8,
+		}
+	}
+
+table_name_wild_list:
+	table_name_opt_wild
+	{
+		$$ = tree.TableExprs{$1}
+	}
+|	table_name_wild_list ',' table_name_opt_wild
+	{
+		$$ = append($1, $3)
+	}
+
+table_name_opt_wild:
+	ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewTableName(tree.Identifier($1), prefix)
+	}
+|	ident '.' ident wild_opt
+	{
+		prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier($3), prefix)
+	}
+
+wild_opt:
+	%prec EMPTY
+	{}
+|	'.' '*'
+	{}
+
+priority_opt:
+	{}
+|	priority
+
+priority:
+	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+
+quick_opt:
+	{}
+|	QUICK
+
+ignore_opt:
+	{}
+|	IGNORE
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data
@@ -2526,13 +2856,86 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false,
+            Distinct: false, 
         }
     }
 |   UNION DISTINCT
     {
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
+            All: false,
+            Distinct: true,
+        }
+    }
+| 
+    EXCEPT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   EXCEPT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: true,
+            Distinct: false, 
+        }
+    }
+|   EXCEPT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.EXCEPT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    INTERSECT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   INTERSECT ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: true,
+            Distinct: false,
+        }
+    }
+|   INTERSECT DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.INTERSECT,
+            All: false,
+            Distinct: true,
+        }
+    }
+|    MINUS
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: false,
+            Distinct: false,
+        }
+    }
+|   MINUS ALL
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
+            All: true,
+            Distinct: false,
+        }
+    }
+|    MINUS DISTINCT
+    {
+        $$ = &tree.UnionTypeRecord{
+            Type: tree.UT_MINUS,
             All: false,
             Distinct: true,
         }
@@ -2662,14 +3065,17 @@ from_clause:
     }
 
 table_references:
-    table_reference
+    escaped_table_reference
     {
         $$ = tree.TableExprs{$1}
     }
-|   table_references ',' table_reference
+|   table_references ',' escaped_table_reference
     {
         $$ = append($1, $3)
     }
+
+escaped_table_reference:
+	table_reference %prec LOWER_THAN_SET
 
 table_reference:
     table_factor
@@ -2883,6 +3289,9 @@ as_name_opt:
 		$$ = $2
 	}
 
+stmt_name:
+    ident
+
 database_id:
     id_or_var
 |   non_reserved_keyword
@@ -2900,6 +3309,7 @@ create_stmt:
     create_ddl_stmt
 |   create_role_stmt
 |   create_user_stmt
+|   create_account_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -2933,113 +3343,234 @@ view_recursive_opt:
 	{}
 |	RECURSIVE
 
+create_account_stmt:
+    CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    {
+	$$ = &tree.CreateAccount{
+		IfNotExists:$3,
+                Name:$4,
+                AuthOption:$5,
+             	StatusOption:$6,
+                Comment:$7,
+	}
+    }
+
+account_name:
+    ID
+    {
+	$$ = $1
+    }
+
+account_auth_option:
+    ADMIN_NAME equal_opt account_admin_name account_identified
+    {
+	$$ = tree.AccountAuthOption{
+		Equal:$2,
+		AdminName:$3,
+                IdentifiedType:$4,
+	}
+    }
+
+account_admin_name:
+    STRING
+    {
+	$$ = $1
+    }
+
+account_identified:
+    IDENTIFIED BY STRING
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByPassword,
+		Str: $3,
+	}
+    }
+|   IDENTIFIED BY RANDOM PASSWORD
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByRandomPassword,
+	}
+    }
+|   IDENTIFIED WITH STRING
+    {
+	$$ = tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedWithSSL,
+		Str: $3,
+	}
+    }
+
+account_status_option:
+    {
+    	$$ = tree.AccountStatus{
+		Exist: false,
+	}
+    }
+|   OPEN
+    {
+	$$ = tree.AccountStatus{
+		Exist: true,
+		Option: tree.AccountStatusOpen,
+	}
+    }
+|   SUSPEND
+    {
+	$$ = tree.AccountStatus{
+		Exist: true,
+		Option: tree.AccountStatusSuspend,
+	}
+    }
+
+account_comment_opt:
+    {
+    	$$ = tree.AccountComment{
+		Exist: false,
+	}
+    }
+|   COMMENT_KEYWORD STRING
+    {
+	$$ = tree.AccountComment{
+		Exist: true,
+		Comment: $2,
+	}
+    }
+
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list require_clause_opt conn_options
+    CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.CreateUser{
             IfNotExists: $3,
             Users: $4,
-            TlsOpts: $5,
-            ResOpts: $6,
+            Role: tree.Role{UserName:$7},
+            MiscOpts: $8,
+            CommentOrAttribute: $9,
         }
     }
 
-conn_options:
+account_role_name:
+    ID
     {
-        $$ = nil
-    }
-|   WITH conn_option_list
-    {
-        $$ = $2
+	$$ = $1
     }
 
-conn_option_list:
-    conn_option
+user_comment_or_attribute_opt:
     {
-        $$ = []tree.ResourceOption{$1}
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: false,
+        }
     }
-|   conn_option_list conn_option
+|   COMMENT_KEYWORD STRING
     {
-        $$ = append($1, $2)
+	$$ = tree.AccountCommentOrAttribute{
+		Exist: true,
+		IsComment: true,
+		Str: $2,
+	}
     }
-
-conn_option:
-    MAX_QUERIES_PER_HOUR INTEGRAL
+|   ATTRIBUTE STRING
     {
-        $$ = &tree.ResourceOptionMaxQueriesPerHour{Count: $2.(int64)}
-    }
-|   MAX_UPDATES_PER_HOUR INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxUpdatesPerHour{Count: $2.(int64)}
-    }
-|   MAX_CONNECTIONS_PER_HOUR INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxConnectionPerHour{Count: $2.(int64)}
-    }
-|   MAX_USER_CONNECTIONS INTEGRAL
-    {
-        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
+	$$ = tree.AccountCommentOrAttribute{
+		Exist: true,
+		IsComment: false,
+		Str: $2,
+	}
     }
 
+//conn_options:
+//    {
+//        $$ = nil
+//    }
+//|   WITH conn_option_list
+//    {
+//        $$ = $2
+//    }
+//
+//conn_option_list:
+//    conn_option
+//    {
+//        $$ = []tree.ResourceOption{$1}
+//    }
+//|   conn_option_list conn_option
+//    {
+//        $$ = append($1, $2)
+//    }
+//
+//conn_option:
+//    MAX_QUERIES_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxQueriesPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_UPDATES_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxUpdatesPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_CONNECTIONS_PER_HOUR INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxConnectionPerHour{Count: $2.(int64)}
+//    }
+//|   MAX_USER_CONNECTIONS INTEGRAL
+//    {
+//        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
+//    }
 
-require_clause_opt:
-    {
-        $$ = nil
-    }
-|   require_clause
 
-require_clause:
-    REQUIRE NONE
-    {
-        t := &tree.TlsOptionNone{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE SSL
-    {
-        t := &tree.TlsOptionSSL{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE X509
-    {
-        t := &tree.TlsOptionX509{}
-        $$ = []tree.TlsOption{t}
-    }
-|   REQUIRE require_list
-    {
-        $$ = $2
-    }
-
-require_list:
-    require_elem
-    {
-        $$ = []tree.TlsOption{$1}
-    }
-|   require_list AND require_elem
-    {
-        $$ = append($1, $3)
-    }
-|   require_list require_elem
-    {
-        $$ = append($1, $2)
-    }
-
-require_elem:
-    ISSUER STRING
-    {
-        $$ = &tree.TlsOptionIssuer{Issuer: $2}
-    }
-|   SUBJECT STRING
-    {
-        $$ = &tree.TlsOptionSubject{Subject: $2}
-    }
-|   CIPHER STRING
-    {
-        $$ = &tree.TlsOptionCipher{Cipher: $2}
-    }
-|   SAN STRING
-    {
-        $$ = &tree.TlsOptionSan{San: $2}
-    }
+//require_clause_opt:
+//    {
+//        $$ = nil
+//    }
+//|   require_clause
+//
+//require_clause:
+//    REQUIRE NONE
+//    {
+//        t := &tree.TlsOptionNone{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE SSL
+//    {
+//        t := &tree.TlsOptionSSL{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE X509
+//    {
+//        t := &tree.TlsOptionX509{}
+//        $$ = []tree.TlsOption{t}
+//    }
+//|   REQUIRE require_list
+//    {
+//        $$ = $2
+//    }
+//
+//require_list:
+//    require_elem
+//    {
+//        $$ = []tree.TlsOption{$1}
+//    }
+//|   require_list AND require_elem
+//    {
+//        $$ = append($1, $3)
+//    }
+//|   require_list require_elem
+//    {
+//        $$ = append($1, $2)
+//    }
+//
+//require_elem:
+//    ISSUER STRING
+//    {
+//        $$ = &tree.TlsOptionIssuer{Issuer: $2}
+//    }
+//|   SUBJECT STRING
+//    {
+//        $$ = &tree.TlsOptionSubject{Subject: $2}
+//    }
+//|   CIPHER STRING
+//    {
+//        $$ = &tree.TlsOptionCipher{Cipher: $2}
+//    }
+//|   SAN STRING
+//    {
+//        $$ = &tree.TlsOptionSan{San: $2}
+//    }
 
 user_spec_list:
     user_spec
@@ -3052,15 +3583,12 @@ user_spec_list:
     }
 
 user_spec:
-    user_name auth_option
+    user_name user_identified_opt
     {
         $$ = &tree.User{
             Username: $1.Username,
             Hostname: $1.Hostname,
-            AuthPlugin: $2.AuthPlugin,
-            AuthString: $2.AuthString,
-            HashString: $2.HashString,
-            ByAuth: $2.ByAuth,
+            AuthOption: $2,
         }
     }
 
@@ -3078,44 +3606,30 @@ user_name:
         $$ = &tree.UsernameRecord{Username: $1, Hostname: $2}
     }
 
-auth_option:
+user_identified_opt:
     {
-        $$ = &tree.AuthRecord{}
+        $$ = nil
     }
-|	IDENTIFIED BY name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthString: $3,
-			ByAuth: true,
-		}
+|   IDENTIFIED BY STRING
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByPassword,
+		Str: $3,
 	}
-|	IDENTIFIED WITH name_string
-	{ 
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-		}
+    }
+|   IDENTIFIED BY RANDOM PASSWORD
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedByRandomPassword,
 	}
-|	IDENTIFIED WITH name_string BY name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-			AuthString: $5,
-			ByAuth: true,
-		}
+    }
+|   IDENTIFIED WITH STRING
+    {
+	$$ = &tree.AccountIdentified{
+		Typ: tree.AccountIdentifiedWithSSL,
+		Str: $3,
 	}
-|	IDENTIFIED WITH name_string AS name_string
-	{
-		$$ = &tree.AuthRecord{
-			AuthPlugin: $3,
-			HashString: $5,
-		}
-	}
-|	IDENTIFIED BY PASSWORD name_string
-	{
-		$$ = &tree.AuthRecord{
-			HashString: $4,
-		}
-	}
+    }
 
 name_string:
     ident
@@ -3143,16 +3657,16 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1, HostName: "%"}
+        $$ = &tree.Role{UserName: $1}
     }
-|   name_string '@' name_string
-    {
-        $$ = &tree.Role{UserName: $1, HostName: $3}
-    }
-|   name_string AT_ID
-    {
-        $$ = &tree.Role{UserName: $1, HostName: $2}
-    }
+//|   name_string '@' name_string
+//    {
+//        $$ = &tree.Role{UserName: $1, HostName: $3}
+//    }
+//|   name_string AT_ID
+//    {
+//        $$ = &tree.Role{UserName: $1, HostName: $2}
+//    }
 
 role_name:
     ID
@@ -4383,11 +4897,11 @@ simple_expr:
 			Else: $4,
 		}
 	}
-|   CAST '(' expression AS cast_type ')' 
+|   CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression ',' cast_type ')' 
+|   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
     }
@@ -4413,6 +4927,10 @@ simple_expr:
         $$ = $1
     }
 |   function_call_aggregate
+    {
+        $$ = $1
+    }
+| function_call_json
     {
         $$ = $1
     }
@@ -4454,7 +4972,41 @@ when_clause:
 		}
 	}
 
-cast_type:
+mo_cast_type:
+	column_type
+|   SIGNED integer_opt
+    {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: name,
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+|   UNSIGNED integer_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.IntFamily,
+                FamilyString: $2,
+		        Width:  64,
+		        Locale: &locale,
+                Unsigned: true,
+		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+	        },
+        }
+    }
+
+mysql_cast_type:
     decimal_type
 |   BINARY length_opt
     {
@@ -4817,6 +5369,17 @@ function_call_generic:
              Exprs: tree.Exprs{arg1, $4, $6},
         }
 	}
+function_call_json:
+	JSON_EXTRACT '(' STRING ',' STRING ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+	$$ = &tree.FuncExpr{
+	     Func: tree.FuncName2ResolvableFunctionReference(name),
+	     Exprs: tree.Exprs{a1, a2},
+	}
+	}
 
 trim_direction:
 	BOTH
@@ -5138,6 +5701,14 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
+|	expression PIPE_CONCAT expression %prec PIPE_CONCAT
+	{
+		name := tree.SetUnresolvedName(strings.ToLower("concat"))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$1, $3},
+        }
+	}
 |   expression XOR expression %prec XOR
     {
         $$ = tree.NewXorExpr($1, $3)
@@ -5382,6 +5953,10 @@ literal:
             return 1
         }
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yyp)
+    }
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -5657,7 +6232,7 @@ decimal_type:
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
         	yylex.Error("For decimal(M), M must between 0 and 38.")
                 return 1
-        } else if $2.DisplayWith <= 18 {
+        } else if $2.DisplayWith <= 16 {
         	$$ = &tree.T{
 		    InternalType: tree.InternalType{
 			Family: tree.FloatFamily,
@@ -6026,7 +6601,7 @@ length_opt:
 timestamp_option_opt:
     /* EMPTY */
     	{
-    	    $$ = 6
+    	    $$ = 0
     	}
 |	'(' INTEGRAL ')'
     {
@@ -6075,7 +6650,7 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 10,           // this is the default precision for decimal
+            DisplayWith: 34,           // this is the default precision for decimal
             Precision: 0,
         }
     }
@@ -6231,13 +6806,13 @@ reserved_keyword:
 |   RENAME
 |   REPLACE
 |   RIGHT
-|   ROLE
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
 |   RECURSIVE
 |   REVERSE
 |   SCHEMA
+|   SCHEMAS
 |   SELECT
 |   SECOND
 |   SEPARATOR
@@ -6288,6 +6863,23 @@ reserved_keyword:
 |	LEADING
 |	TRAILING
 |   CHARACTER
+|	LOW_PRIORITY
+|	HIGH_PRIORITY
+|	DELAYED
+|   PARTITION
+|	QUICK
+|   EXCEPT
+|   ADMIN_NAME
+|   RANDOM
+|   SUSPEND
+|   ATTRIBUTE
+|   REUSE
+|   CURRENT
+|   OPTIONAL
+|   FAILED_LOGIN_ATTEMPTS
+|   PASSWORD_LOCK_TIME
+|   UNBOUNDED
+|   SECONDARY
 
 non_reserved_keyword:
     AGAINST
@@ -6329,7 +6921,6 @@ non_reserved_keyword:
 |   EXPANSION
 |   EXTENDED
 |   EXPIRE
-|   EXCEPT
 |   ERRORS
 |   ENFORCED
 |   FORMAT
@@ -6384,13 +6975,13 @@ non_reserved_keyword:
 |   OPTION
 |   PACK_KEYS
 |   PARTIAL
-|   PARTITION
 |   PARTITIONS
 |   POINT
 |   POLYGON
 |   PROCEDURE
 |   PROXY
 |   QUERY
+|   ROLE
 |   RANGE
 |   READ
 |   REAL

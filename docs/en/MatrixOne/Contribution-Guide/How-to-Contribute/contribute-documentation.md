@@ -4,17 +4,17 @@ Contributions to the MatrixOne documentation are welcome from everyone. The Matr
 
 ## **Before you start**
 
-Before you contribute please take a minute to familiarize yourself with basic [Markdown](https://www.markdownguide.org/basic-syntax/) syntax and have a look at our [Code of Conduct](../Code-Style/code-of-conduct.md) and the [Google Developer Documentation Style Guide](https://developers.google.com/style/) for some guidance on how to write accessible, consistent, and inclusive documentation.
+Before you contribute, please take a minute to familiarize yourself with basic [Markdown](https://www.markdownguide.org/basic-syntax/) syntax and look at our [Code of Conduct](../Code-Style/code-of-conduct.md) and the [Google Developer Documentation Style Guide](https://developers.google.com/style/) for some guidance on writing accessible, consistent, and inclusive documentation.
 
 ## **How is MatrixOne documentation project organized?**
 
 The MatrixOne documentation is managed in 3 repositories:
 
-* The main project framework and CI&CD settings are in the [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) repo. 
+* The main project framework and CI&CD settings are in the [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) repo.
 
-* The markdown contents are in the docs/en/MatrixOne folder of [matrixone](https://github.com/matrixorigin/matrixone) repo. 
+* The markdown contents are in the docs/en/MatrixOne folder of [matrixone](https://github.com/matrixorigin/matrixone) repo.
 
-* The images and unstructured data are located in the [artwork](https://github.com/matrixorigin/artwork) repo. 
+* The images and unstructured data are located in the [artwork](https://github.com/matrixorigin/artwork) repo.
 
 The `matrixorigin.io` repo contains a submodule that links to `matrixone` repo contents. The images are referred to as web image links from `artwork` repo. The `matrixorigin.io` has implemented a CI&CD project, which will be triggered by a new code merge and manual launch. This CI&CD workflow publishes the documentation to [https://docs.matrixorigin.io/](https://docs.matrixorigin.io/).  
 
@@ -24,7 +24,7 @@ The documentation project is based on the [mkdocs-material](https://github.com/s
 
 The MatrixOne documentation content is planned with 6 main modules.  
 
-* **Overview**: MatrixOne's introduction, features, architecture, tech design. 
+* **Overview**: MatrixOne's introduction, features, architecture.
 
 * **Get Started**: How to quickly deploy and run a MatrixOne in a standalone or a distributed environment.
 
@@ -42,7 +42,7 @@ The MatrixOne documentation content is planned with 6 main modules.
 
 ## **Lift a finger**
 
-If you are just correcting a typo or grammatical error, feel free to go ahead and [create a pull request](https://github.com/matrixorigin/matrixone/pulls). 
+If you are just correcting a typo or grammatical error, feel free to go ahead and [create a pull request](https://github.com/matrixorigin/matrixone/pulls).
 
 ### **Contribute Workflow**
 
@@ -52,13 +52,13 @@ If you are just correcting a typo or grammatical error, feel free to go ahead an
 *3*. Clone the [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) repo, using `--recursive` to retrieve the submodule of [matrixone](https://github.com/matrixorigin/matrixone) repo.
 
 ```
-$ git clone --recursive git@github.com:yourusername/matrixorigin.io.git
+git clone --recursive git@github.com:yourusername/matrixorigin.io.git
 ```
 
 Clone the [matrixone](https://github.com/matrixorigin/matrixorigin.io) repo to the other folder in local:
 
 ```
-$ git clone git@github.com:yourusername/matrixone.git
+git clone git@github.com:yourusername/matrixone.git
 ```
 
 *4*. Add `matrixone` repo as a remote repository in your local matrixone folder with:  
@@ -76,12 +76,12 @@ git remote add upstream https://github.com/matrixorigin/matrixorigin.io.git
 *5*. As the local repo has the full documentation project code, you can run `mkdocs serve` under `matrixorigin.io` folder, and check `http://localhost:8000` to check if this project runs well.  
 
 ```
-$ mkdocs serve
+mkdocs serve
 ```
 
-*6*. Make your modification. If the modification is about the project settings, updating the sitemap with new pages, or updating the CI&CD workflow code. You can always check `http://localhost:8000` to see if your modification is effective. If your modification is about the markdown contents, after you update the `docs` submodule of `matrixorigin.io`, the same modifcation should be applied to the `matrixone` repo.
+*6*. Make your modification. If the modification concerns the project settings, update the sitemap with new pages, or update the CI&CD workflow code. You can always check `http://localhost:8000` to see if your modification is effective. If your modification is about the markdown contents, after you update the `docs` submodule of `matrixorigin.io`, the same modification should be applied to the `matrixone` repository.
 
-*7*. Push your git commits to your remote Github `matrixorigin.io` and `matrixone` repos. We recommend you to push to a new branch using the following commands:
+*7*. Push your git commits to your remote Github `matrixorigin.io` and `matrixone` repos. We recommend you push to a new branch using the following commands:
 
 ```
 git push origin main:NEW_BRANCH
@@ -89,10 +89,10 @@ git push origin main:NEW_BRANCH
 
 *8*. Go back to GitHub, and submit a pull request in `NEW_BRANCH` so that we can review your changes.  
 
-*9*. Once your code for both repos is merged, you'll wait for a CI&CD workflow to restart running until the documentation website being updated.
+*9*. Once your code for both repositories is merged, you'll wait for a CI&CD workflow to restart running until the documentation website being updated.
 
 !!! note  
-    So once your pull requests are merged, the update to the website is not immediate. We'll need to run a manual launch to update it. 
+    So once your pull requests are merged, the update to the website is not immediate. We'll need to run a manual launch to update it.
 
 *10*. At last, you should update your local and remote repo to help keep committing history clean. Override your local committing repo with:  
 

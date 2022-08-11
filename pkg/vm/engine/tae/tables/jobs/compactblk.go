@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -44,6 +45,8 @@ type compactBlockTask struct {
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
+	mapping   []uint32
+	deletes   *roaring.Bitmap
 }
 
 func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
@@ -84,13 +87,14 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 	schema := task.meta.GetSchema()
 	var view *model.ColumnView
 	for _, def := range schema.ColDefs {
-		if def.IsHidden() {
+		if def.IsPhyAddr() {
 			continue
 		}
 		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
 		if err != nil {
 			return
 		}
+		task.deletes = view.DeleteMask
 		view.ApplyDeletes()
 		vec := view.Orphan()
 		preparer.Columns.AddVector(def.Name, vec)
@@ -114,20 +118,20 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			vecs = append(vecs, preparer.SortKey)
 			// preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
 		}
-		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
-			return
+		if task.mapping, err = mergesort.SortBlockColumns(vecs, idx); err != nil {
+			return preparer, err
 		}
 	}
-	// Prepare hidden column data
-	hidden, err := model.PrepareHiddenData(
-		catalog.HiddenColumnType,
+	// Prepare PhyAddr column data
+	phyAddrVec, err := model.PreparePhyAddrData(
+		catalog.PhyAddrColumnType,
 		blkKey,
 		0,
 		uint32(preparer.Columns.Length()))
 	if err != nil {
 		return
 	}
-	preparer.Columns.AddVector(catalog.HiddenColumnName, hidden)
+	preparer.Columns.AddVector(catalog.PhyAddrColumnName, phyAddrVec)
 	return
 }
 
@@ -178,7 +182,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
-	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler)
+	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}

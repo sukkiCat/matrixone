@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package indexwrapper
 
 import (
@@ -6,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type immutableIndex struct {
@@ -17,10 +32,11 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
-func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
-func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) error {
+func (index *immutableIndex) IsKeyDeleted(any, types.TS) (bool, bool)        { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)               { panic("not supported") }
+func (index *immutableIndex) Delete(any, types.TS) error                     { panic("not supported") }
+func (index *immutableIndex) RevertUpsert(containers.Vector, types.TS) error { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, types.TS) (*index.BatchResp, error) {
 	panic("not supported")
 }
 
@@ -42,13 +58,14 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (idx *immutableIndex) String() string {
+func (index *immutableIndex) String() string {
 	panic("implement me")
 }
-func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
-func (index *immutableIndex) HasDeleteFrom(key any, fromTs uint64) bool { panic("not supported") }
+func (index *immutableIndex) GetMaxDeleteTS() types.TS                    { panic("not supported") }
+func (index *immutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool { panic("not supported") }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys containers.Vector,
+	rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
@@ -93,10 +110,12 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 		return
 	}
 	metas := idxMeta.(*IndicesMeta)
-	colFile, err := file.OpenColumn(entry.GetSchema().SortKey.Defs[0].Idx)
+	colDef := entry.GetSchema().SortKey.Defs[0]
+	colFile, err := file.OpenColumn(colDef.Idx)
 	if err != nil {
 		return
 	}
+	defer colFile.Close()
 	for _, meta := range metas.Metas {
 		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
 		if err != nil {
@@ -110,13 +129,15 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
-			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
+			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
 		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
+				idxFile.Unref()
 				return err
 			}
 			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)

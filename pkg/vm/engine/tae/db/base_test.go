@@ -1,8 +1,22 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package db
 
 import (
 	"errors"
-	"io/ioutil"
+	"os"
 	"sync"
 	"testing"
 
@@ -35,6 +49,7 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 	db := initDB(t, opts)
 	return &testEngine{
 		DB: db,
+		t:  t,
 	}
 }
 
@@ -53,6 +68,19 @@ func (e *testEngine) Close() error {
 
 func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
 	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
+}
+
+// func (e *testEngine) getRows() int {
+// 	txn, rel := e.getRelation()
+// 	rows := rel.Rows()
+// 	assert.NoError(e.t, txn.Commit())
+// 	return int(rows)
+// }
+
+func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
+	txn, rel := e.getRelation()
+	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
+	assert.NoError(e.t, txn.Commit())
 }
 
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
@@ -84,6 +112,13 @@ func (e *testEngine) getDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return
 }
 
+func (e *testEngine) doAppend(bat *containers.Batch) {
+	txn, rel := e.getRelation()
+	err := rel.Append(bat)
+	assert.NoError(e.t, err)
+	assert.NoError(e.t, txn.Commit())
+}
+
 func (e *testEngine) tryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
 	assert.NoError(e.t, err)
@@ -101,6 +136,27 @@ func (e *testEngine) tryAppend(bat *containers.Batch) {
 		return
 	}
 	_ = txn.Commit()
+}
+
+func (e *testEngine) deleteAll(skipConflict bool) error {
+	txn, rel := e.getRelation()
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+		assert.NoError(e.t, err)
+		defer view.Close()
+		view.ApplyDeletes()
+		err = rel.DeleteByPhyAddrKeys(view.GetData())
+		assert.NoError(e.t, err)
+		it.Next()
+	}
+	checkAllColRowsByScan(e.t, rel, 0, true)
+	err := txn.Commit()
+	if !skipConflict {
+		assert.NoError(e.t, err)
+	}
+	return err
 }
 
 func (e *testEngine) truncate() {
@@ -135,7 +191,7 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := ioutil.ReadDir(e.Dir)
+	files, err := os.ReadDir(e.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -283,10 +339,10 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(colIdx, nil)
-		defer view.Close()
 		if err != nil {
 			return
 		}
+		defer view.Close()
 		err = fn(view)
 		return
 	})

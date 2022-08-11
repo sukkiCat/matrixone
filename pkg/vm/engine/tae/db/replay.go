@@ -1,10 +1,25 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package db
 
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"os"
+
 	"path"
 	"sync"
 
@@ -13,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -25,7 +41,7 @@ const DefaultReplayCacheSize = 2 * common.M
 type Replayer struct {
 	DataFactory  *tables.DataFactory
 	db           *DB
-	maxTs        uint64
+	maxTs        types.TS
 	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
 	once         sync.Once
@@ -68,7 +84,7 @@ func (replayer *Replayer) PreReplayWal() {
 
 func (replayer *Replayer) scanFiles() map[uint64]string {
 	files := make(map[uint64]string)
-	infos, err := ioutil.ReadDir(replayer.db.Dir)
+	infos, err := os.ReadDir(replayer.db.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -162,7 +178,7 @@ func (replayer *Replayer) PostReplayWal() {
 	for id := range activeSegs {
 		_, ok := files[id]
 		if !ok {
-			panic(fmt.Errorf("Cannot find segment file for: %d", id))
+			panic(fmt.Errorf("cannot find segment file for: %d", id))
 		}
 		delete(files, id)
 	}
@@ -186,7 +202,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if group != wal.GroupC {
 		return
 	}
-	idxCtx := wal.NewIndex(commitId, 0, 0)
+	idxCtx := store.NewIndex(commitId, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
@@ -198,12 +214,12 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	}
 }
 
-func (replayer *Replayer) GetMaxTS() uint64 {
+func (replayer *Replayer) GetMaxTS() types.TS {
 	return replayer.maxTs
 }
 
-func (replayer *Replayer) OnTimeStamp(ts uint64) {
-	if ts > replayer.maxTs {
+func (replayer *Replayer) OnTimeStamp(ts types.TS) {
+	if ts.Greater(replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -243,7 +259,35 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
+	hasActive := false
+	for _, info := range cmd.Infos {
+		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
+		if err != nil {
+			panic(err)
+		}
+		id := info.GetDest()
+		blk, err := database.GetBlockEntryByID(id)
+		if err != nil {
+			panic(err)
+		}
+		if !blk.IsActive() {
+			continue
+		}
+		if observer != nil {
+			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
+		}
+		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
+			continue
+		}
+		hasActive = true
+	}
+
+	if !hasActive {
+		return
+	}
+
 	var data *containers.Batch
+
 	for _, subTxnCmd := range cmd.Cmds {
 		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:
@@ -282,7 +326,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if observer != nil {
 			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
+		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 			continue
 		}
 		start := info.GetSrcOff()
@@ -323,7 +367,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if deleteNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if deleteNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -353,7 +397,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if appendNode.GetCommitTS() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if appendNode.GetCommitTS().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -381,7 +425,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if updateNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
+	if updateNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

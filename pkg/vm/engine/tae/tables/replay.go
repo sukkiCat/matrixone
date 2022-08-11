@@ -22,42 +22,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
+	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
 	masks, vals := blk.file.LoadUpdates()
-	if masks != nil {
-		for colIdx, mask := range masks {
-			logutil.Info("[Start]",
-				common.TimestampField(blk.ckpTs),
-				common.OperationField("install-update"),
-				common.OperandNameSpace(),
-				common.AnyField("rows", blk.node.rows),
-				common.AnyField("col", colIdx),
-				common.CountField(int(mask.GetCardinality())))
-			un := updates.NewCommittedColumnUpdateNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
-			un.SetMask(mask)
-			un.SetValues(vals[colIdx])
-			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
-				return
-			}
+	for colIdx, mask := range masks {
+		logutil.Info("[Start]",
+			common.TimestampField(blk.ckpTs.Load().(types.TS)),
+			common.OperationField("install-update"),
+			common.OperandNameSpace(),
+			common.AnyField("rows", blk.node.rows),
+			common.AnyField("col", colIdx),
+			common.CountField(int(mask.GetCardinality())))
+		un := updates.NewCommittedColumnUpdateNode(blk.ckpTs.Load().(types.TS), blk.ckpTs.Load().(types.TS), blk.meta.AsCommonID(), nil)
+		un.SetMask(mask)
+		un.SetValues(vals[colIdx])
+		if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
+			return
 		}
 	}
 	deletes, err := blk.file.LoadDeletes()
 	if err != nil || deletes == nil {
 		return
 	}
-	logutil.Info("[Start]", common.TimestampField(blk.ckpTs),
+	logutil.Info("[Start]", common.TimestampField(blk.ckpTs.Load().(types.TS)),
 		common.OperationField("install-del"),
 		common.OperandNameSpace(),
 		common.AnyField("rows", blk.node.rows),
 		common.CountField(int(deletes.GetCardinality())))
-	deleteNode := updates.NewMergedNode(blk.ckpTs)
+	deleteNode := updates.NewMergedNode(blk.ckpTs.Load().(types.TS))
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
 	return
@@ -101,7 +100,8 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		keysCtx.Start = 0
 		keysCtx.Count = keysCtx.Keys.Length()
 		defer keysCtx.Keys.Close()
-		err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		var zeroV types.TS
+		_, err = blk.index.BatchUpsert(keysCtx, 0, zeroV)
 		return
 	}
 	if blk.meta.GetSchema().HasSortKey() {

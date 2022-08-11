@@ -14,21 +14,19 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the operator controller.
 
 package operator
 
 import (
-	"sync"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // Controller is used to manage operators.
 type Controller struct {
-	sync.RWMutex
+	// operators is a map from shardID to its operators.
 	operators map[uint64][]*Operator
 }
 
@@ -40,16 +38,14 @@ func NewController() *Controller {
 
 // RemoveOperator removes an operator from the operators.
 func (c *Controller) RemoveOperator(op *Operator) bool {
-	c.Lock()
-	removed := c.removeOperatorLocked(op)
-	c.Unlock()
+	removed := c.removeOperator(op)
 	if removed {
 		_ = op.Cancel()
 	}
 	return removed
 }
 
-func (c *Controller) removeOperatorLocked(op *Operator) bool {
+func (c *Controller) removeOperator(op *Operator) bool {
 	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
 			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
@@ -64,44 +60,42 @@ func (c *Controller) removeOperatorLocked(op *Operator) bool {
 
 // GetOperators gets operators from the given shard.
 func (c *Controller) GetOperators(shardID uint64) []*Operator {
-	c.RLock()
-	defer c.RUnlock()
-
 	return c.operators[shardID]
 }
 
-func (c *Controller) GetRemovingReplicas() (removing map[uint64][]uint64) {
+type ExecutingReplicas struct {
+	Adding   map[uint64][]uint64
+	Removing map[uint64][]uint64
+	Starting map[uint64][]uint64
+}
+
+func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
+	executing := ExecutingReplicas{
+		Adding:   make(map[uint64][]uint64),
+		Removing: make(map[uint64][]uint64),
+		Starting: make(map[uint64][]uint64),
+	}
 	for shardID, operators := range c.operators {
 		for _, op := range operators {
 			for _, step := range op.steps {
-				switch step.(type) {
+				switch step := step.(type) {
 				case RemoveLogService:
-					removing[shardID] = append(removing[shardID], step.(RemoveLogService).ReplicaID)
-				}
-			}
-		}
-	}
-	return
-}
-
-func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
-	for shardID, operators := range c.operators {
-		for _, op := range operators {
-			for _, step := range op.steps {
-				switch step.(type) {
+					executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
 				case AddLogService:
-					adding[shardID] = append(adding[shardID], step.(AddLogService).ReplicaID)
+					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
+				case StartLogService:
+					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
 				}
 			}
 		}
 	}
-	return
+	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(dnState pb.DNState, state pb.LogState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(state, dnState)
+			op.Check(logState, dnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -110,7 +104,8 @@ func (c *Controller) RemoveFinishedOperator(dnState pb.DNState, state pb.LogStat
 	}
 }
 
-func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.DNState) (commands []pb.ScheduleCommand) {
+func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
+	dnState pb.DNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		step := op.Check(logState, dnState)
@@ -121,7 +116,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.Target,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
@@ -135,9 +130,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.Target,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
+						Epoch:     st.Epoch,
 					},
 					ChangeType: pb.RemoveReplica,
 				},
@@ -145,10 +141,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 			}
 		case StartLogService:
 			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
+				UUID: st.UUID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
+						UUID:      st.UUID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
@@ -158,13 +154,28 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 			}
 		case StopLogService:
 			cmd = pb.ScheduleCommand{
-				UUID: st.StoreID,
+				UUID: st.UUID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:    st.StoreID,
+						UUID:    st.UUID,
 						ShardID: st.ShardID,
+						Epoch:   st.Epoch,
 					},
-					ChangeType: pb.StopReplica,
+					ChangeType: pb.RemoveReplica,
+				},
+				ServiceType: pb.LogService,
+			}
+		case KillLogZombie:
+			cmd = pb.ScheduleCommand{
+				UUID:          st.UUID,
+				Bootstrapping: false,
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
+						UUID:      st.UUID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: pb.KillZombie,
 				},
 				ServiceType: pb.LogService,
 			}
@@ -173,11 +184,12 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.StoreID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
+						UUID:       st.StoreID,
+						ShardID:    st.ShardID,
+						ReplicaID:  st.ReplicaID,
+						LogShardID: st.LogShardID,
 					},
-					ChangeType: pb.AddReplica,
+					ChangeType: pb.StartReplica,
 				},
 				ServiceType: pb.DnService,
 			}
@@ -186,11 +198,12 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.
 				UUID: st.StoreID,
 				ConfigChange: &pb.ConfigChange{
 					Replica: pb.Replica{
-						UUID:      st.StoreID,
-						ShardID:   st.ShardID,
-						ReplicaID: st.ReplicaID,
+						UUID:       st.StoreID,
+						ShardID:    st.ShardID,
+						ReplicaID:  st.ReplicaID,
+						LogShardID: st.LogShardID,
 					},
-					ChangeType: pb.RemoveReplica,
+					ChangeType: pb.StopReplica,
 				},
 				ServiceType: pb.DnService,
 			}

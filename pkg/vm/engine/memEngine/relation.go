@@ -1,54 +1,55 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package memEngine
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
-
-func (r *relation) Close(_ engine.Snapshot) {}
-
-func (r *relation) ID(_ engine.Snapshot) string {
-	return r.id
-}
 
 func (r *relation) Rows() int64 {
 	return r.md.Rows
 }
 
-func (_ *relation) Size(_ string) int64 {
+func (*relation) Size(_ string) int64 {
 	return 0
 }
 
-func (_ *relation) Cardinality(_ string) int64 {
-	return 0
+func (r *relation) Ranges(_ context.Context) ([][]byte, error) {
+	return nil, nil
 }
 
-func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
-	return engine.Nodes{r.n}
+func (r *relation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
+	return nil, nil
 }
 
-func (r *relation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
-	return nil
+func (r *relation) GetHideKeys(_ context.Context) ([]*engine.Attribute, error) {
+	return nil, nil
 }
 
-func (r *relation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
-	return nil
-}
-
-func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
-	return nil, false
-}
-
-func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
+func (r *relation) TableDefs(_ context.Context) ([]engine.TableDef, error) {
 	defs := make([]engine.TableDef, len(r.md.Attrs)+len(r.md.Index))
 	for i, attr := range r.md.Attrs {
 		defs[i] = &engine.AttributeDef{Attr: attr}
@@ -60,10 +61,10 @@ func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 		defs[j] = &localIndex
 		j++
 	}
-	return defs
+	return defs, nil
 }
 
-func (r *relation) NewReader(n int, _ extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
+func (r *relation) NewReader(_ context.Context, n int, _ *plan.Expr, _ [][]byte) ([]engine.Reader, error) {
 	segs := make([]string, r.md.Segs)
 	for i := range segs {
 		segs[i] = sKey(i, r.id)
@@ -104,10 +105,10 @@ func (r *relation) NewReader(n int, _ extend.Extend, _ []byte, _ engine.Snapshot
 			rs[i] = &reader{}
 		}
 	}
-	return rs
+	return rs, nil
 }
 
-func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 	key := sKey(int(r.md.Segs), r.id)
 	for i, attr := range bat.Attrs {
 		v, err := bat.Vecs[i].Show()
@@ -139,27 +140,23 @@ func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+func (r *relation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
 	return nil
 }
 
-func (r *relation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+func (r *relation) Update(_ context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error {
+func (r *relation) Truncate(_ context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (r *relation) AddTableDef(_ context.Context, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DropIndex(epoch uint64, name string) error {
-	return nil
-}
-
-func (r *relation) AddTableDef(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
-	return nil
-}
-
-func (r *relation) DelTableDef(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
+func (r *relation) DelTableDef(_ context.Context, _ engine.TableDef) error {
 	return nil
 }
 

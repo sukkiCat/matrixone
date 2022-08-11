@@ -164,7 +164,7 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, len(names))
 
 	// 5. Create a table and append 3 block
-	db, _ = createRelationAndAppend(t, tae, "db", schema, bat, false)
+	createRelationAndAppend(t, tae, "db", schema, bat, false)
 	names = getSegmentFileNames(tae)
 	t.Log(names)
 	assert.Equal(t, 2, len(names))
@@ -185,7 +185,7 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, len(names))
 
 	// 7. Create a table
-	db, _ = createRelation(t, tae, "db", schema, false)
+	createRelation(t, tae, "db", schema, false)
 
 	// 8. Append blocks and drop
 	var wg sync.WaitGroup
@@ -273,7 +273,7 @@ func TestGCDB(t *testing.T) {
 	compactBlocks(t, tae, "db", schema2, true)
 	dropDB(t, tae, "db")
 
-	testutils.WaitExpect(2000, func() bool {
+	testutils.WaitExpect(4000, func() bool {
 		return tae.Catalog.CoarseDBCnt() == 1
 	})
 	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())
@@ -297,7 +297,7 @@ func TestGCDB(t *testing.T) {
 			_ = txn.Rollback()
 			return
 		}
-		rel, err := db.CreateRelation(schema)
+		_, err = db.CreateRelation(schema)
 		assert.NoError(t, err)
 		err = txn.Commit()
 		if err != nil {
@@ -310,7 +310,7 @@ func TestGCDB(t *testing.T) {
 			_ = txn.Rollback()
 			return
 		}
-		rel, err = db.GetRelationByName(schema.Name)
+		rel, err := db.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
 		err = rel.Append(bat)
 		assert.NoError(t, err)

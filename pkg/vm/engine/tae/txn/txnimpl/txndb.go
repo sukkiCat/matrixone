@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package txnimpl
 
 import (
@@ -10,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type txnDB struct {
@@ -20,6 +33,7 @@ type txnDB struct {
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
 	ddlCSN      uint32
+	idx         int
 }
 
 func newTxnDB(store *txnStore, entry *catalog.DBEntry) *txnDB {
@@ -43,9 +57,6 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 	if db.dropEntry != nil {
 		panic("logic error")
-	}
-	if db.createEntry != nil {
-		return txnbase.ErrDDLDropCreated
 	}
 	db.store.IncreateWriteCnt()
 	db.dropEntry = e
@@ -106,7 +117,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	return table.Append(bat)
 }
 
-func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
+func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -114,7 +125,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	if table.IsDeleted() {
 		return data.ErrNotFound
 	}
-	return table.RangeDelete(id, start, end)
+	return table.RangeDelete(id, start, end, dt)
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -233,6 +244,7 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 			db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
 		}
 		table = newTxnTable(db.store, entry)
+		table.idx = len(db.tables)
 		db.tables[id] = table
 	}
 	return
@@ -371,14 +383,22 @@ func (db *txnDB) PreApplyCommit() (err error) {
 func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	if db.createEntry != nil {
 		csn := cmdMgr.GetCSN()
-		cmd, err := db.createEntry.MakeCommand(csn)
+		entry := db.createEntry
+		if db.dropEntry != nil {
+			entry = db.createEntry.(*catalog.DBEntry).CloneCreateEntry()
+		}
+		cmd, err := entry.MakeCommand(csn)
 		if err != nil {
 			panic(err)
 		}
 		cmdMgr.AddCmd(cmd)
 		db.ddlCSN = csn
 	}
+	tables := make([]*txnTable, len(db.tables))
 	for _, table := range db.tables {
+		tables[table.idx] = table
+	}
+	for _, table := range tables {
 		if err = table.CollectCmd(cmdMgr); err != nil {
 			return
 		}

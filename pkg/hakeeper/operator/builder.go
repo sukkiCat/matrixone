@@ -14,7 +14,7 @@
 // Portions of this file are additionally subject to the following
 // copyright.
 //
-// Copyright (C) 2021 MatrixOrigin.
+// Copyright (C) 2021 Matrix Origin.
 //
 // Modified the behavior of the builder.
 
@@ -28,10 +28,12 @@ import (
 )
 
 // Builder is used to create operators. Usage:
-//     op, err := NewBuilder(desc, cluster, shard).
-//                 RemovePeer(store1).
-//                 AddPeer(peer1).
-//                 Build(kind)
+//
+//	op, err := NewBuilder(desc, cluster, shard).
+//	            RemovePeer(store1).
+//	            AddPeer(peer1).
+//	            Build(kind)
+//
 // The generated Operator will choose the most appropriate execution order
 // according to various constraints.
 type Builder struct {
@@ -160,10 +162,8 @@ func (b *Builder) buildSteps() error {
 
 		uuid, replicaID := b.toRemove.Get()
 		b.steps = append(b.steps, RemoveLogService{
-			Target:    targets[0],
-			StoreID:   uuid,
-			ShardID:   b.shardID,
-			ReplicaID: replicaID,
+			Target:  targets[0],
+			Replica: Replica{uuid, b.shardID, replicaID, b.epoch},
 		})
 		delete(b.toRemove, uuid)
 		continue
@@ -178,11 +178,13 @@ func (b *Builder) buildSteps() error {
 
 		uuid, replicaID := b.toAdd.Get()
 		b.steps = append(b.steps, AddLogService{
-			Target:    targets[0],
-			StoreID:   uuid,
-			ShardID:   b.shardID,
-			ReplicaID: replicaID,
-			Epoch:     b.epoch,
+			Target: targets[0],
+			Replica: Replica{
+				UUID:      uuid,
+				ShardID:   b.shardID,
+				ReplicaID: replicaID,
+				Epoch:     b.epoch,
+			},
 		})
 		delete(b.toAdd, uuid)
 	}

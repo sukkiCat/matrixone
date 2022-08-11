@@ -15,6 +15,7 @@
 package txnif
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"io"
 	"sync"
 
@@ -39,8 +40,8 @@ type TxnReader interface {
 	RUnlock()
 	GetID() uint64
 	GetCtx() []byte
-	GetStartTS() uint64
-	GetCommitTS() uint64
+	GetStartTS() types.TS
+	GetCommitTS() types.TS
 	GetInfo() []byte
 	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
@@ -50,6 +51,10 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+
+	SameTxn(startTs types.TS) bool
+	CommitBefore(startTs types.TS) bool
+	CommitAfter(startTs types.TS) bool
 }
 
 type TxnHandle interface {
@@ -64,9 +69,9 @@ type TxnChanger interface {
 	RLock()
 	RUnlock()
 	ToCommittedLocked() error
-	ToCommittingLocked(ts uint64) error
+	ToCommittingLocked(ts types.TS) error
 	ToRollbackedLocked() error
-	ToRollbackingLocked(ts uint64) error
+	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
 	Commit() error
 	Rollback() error
@@ -82,7 +87,7 @@ type TxnAsyncer interface {
 }
 
 type TxnTest interface {
-	MockSetCommitTSLocked(ts uint64)
+	MockSetCommitTSLocked(ts types.TS)
 	MockIncWriteCnt() int
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
@@ -119,7 +124,7 @@ type UpdateChain interface {
 	AddNodeLocked(txn AsyncTxn) UpdateNode
 	PrepareUpdate(uint32, UpdateNode) error
 
-	GetValueLocked(row uint32, ts uint64) (any, error)
+	GetValueLocked(row uint32, ts types.TS) (any, error)
 	TryUpdateNodeLocked(row uint32, v any, n UpdateNode) error
 	// CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
 	// CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
@@ -132,16 +137,18 @@ type DeleteChain interface {
 	// GetID() *common.ID
 	RemoveNodeLocked(DeleteNode)
 
-	AddNodeLocked(txn AsyncTxn) DeleteNode
+	AddNodeLocked(txn AsyncTxn, deleteType handle.DeleteType) DeleteNode
 	AddMergeNode() DeleteNode
 
-	PrepareRangeDelete(start, end uint32, ts uint64) error
+	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(ts uint64, collectIndex bool) (DeleteNode, error)
+	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
 
 type AppendNode interface {
 	TxnEntry
+	GetStartRow() uint32
+	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
@@ -179,7 +186,7 @@ type TxnStore interface {
 
 	Append(dbId, id uint64, data *containers.Batch) error
 
-	RangeDelete(dbId uint64, id *common.ID, start, end uint32) error
+	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
 	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)

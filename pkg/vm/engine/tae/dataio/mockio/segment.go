@@ -17,6 +17,7 @@ package mockio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"path"
 	"strconv"
 	"strings"
@@ -49,6 +50,7 @@ func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		return
 	}
 	id, err = strconv.ParseUint(trimmed, 10, 64)
 	if err != nil {
@@ -61,7 +63,7 @@ type segmentFile struct {
 	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
-	ts     uint64
+	ts     types.TS
 	blocks map[uint64]*blockFile
 	name   string
 }
@@ -117,12 +119,12 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
-func (sf *segmentFile) WriteTS(ts uint64) error {
+func (sf *segmentFile) WriteTS(ts types.TS) error {
 	sf.ts = ts
 	return nil
 }
 
-func (sf *segmentFile) ReadTS() uint64 {
+func (sf *segmentFile) ReadTS() types.TS {
 	return sf.ts
 }
 

@@ -1,16 +1,16 @@
 create table t1 (a tinyint unsigned not null, primary key(a));
 insert into t1 values (255), (0xFC), (254), (253);
-select * from t1;
+select * from t1 order by 1 asc;
 a
 252
 253
 254
 255
-select * from t1 where a=255;
+select * from t1 where a=255 order by a desc;
 a
 255
 delete from t1 where a=255;
-select * from t1;
+select * from t1 order by a asc;
 a
 252
 253
@@ -18,7 +18,7 @@ a
 drop table t1;
 create table t1 ( a tinyint not null default 1, tinyint8 tinyint primary key);
 insert into t1 (tinyint8) values (-1),(127),(-128);
-select * from t1;
+select * from t1 order by a desc, 2 asc;
 a	tinyint8
 1	-128
 1	-1
@@ -26,13 +26,13 @@ a	tinyint8
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1;
 min(tinyint8)	max(tinyint8)	max(tinyint8)-1
 -128	127	126
-select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a;
+select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a order by 1;
 min(tinyint8)	max(tinyint8)	max(tinyint8)-1
 -128	127	126
 drop table t1;
 create table t1 ( a tinyint not null default 1, tinyint8 tinyint unsigned primary key);
 insert into t1 (tinyint8) values (0),(255), (0xFE), (253);
-select * from t1;
+select * from t1 order by 2 asc;
 a	tinyint8
 1	0
 1	253
@@ -51,7 +51,7 @@ a	tinyint8
 select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1;
 min(tinyint8)	max(tinyint8)	max(tinyint8)-1
 0	255	254
-select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a;
+select min(tinyint8),max(tinyint8),max(tinyint8)-1 from t1 group by a order by abs(1);
 min(tinyint8)	max(tinyint8)	max(tinyint8)-1
 0	255	254
 drop table t1;
@@ -96,10 +96,10 @@ valueu8	value8	valueu8	value8
 5	-128	5	-128
 127	2	127	4
 255	1	255	3
-select * from t1 join t2 on t1.valueu8=t2.valueu8 where t1.valueu8=255;
+select * from t1 join t2 on t1.valueu8=t2.valueu8 where t1.valueu8=255 order by 1+2 desc;
 valueu8	value8	valueu8	value8
 255	1	255	3
-select * from t1 join t2 on t1.value8=t2.value8 order by 2;
+select * from t1 join t2 on t1.value8=t2.value8 order by 2,3 asc;
 valueu8	value8	valueu8	value8
 5	-128	5	-128
 drop table if exists t1;
@@ -140,6 +140,8 @@ UPDATE t1 SET b = a;
 select * from t1 where ((a = 255) and (b = '255')) order by 1 desc, 2 asc;
 id	a	b
 4	255	255
+drop table t1;
+
 CREATE TABLE t_tinyint(id TINYINT);
 INSERT INTO t_tinyint VALUES (1), (2);
 SELECT id, id >= 1.1 FROM t_tinyint;
@@ -163,26 +165,25 @@ id
 SELECT * from t_tinyint WHERE id = 1.1e0;
 id
 SELECT * from t_tinyint WHERE id = '1.1';
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id = '1.1e0';
-id
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_tinyint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_tinyint WHERE id IN ('1.1', '2.2');
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id IN ('1.1e0', '2.2e0');
-id
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_tinyint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_tinyint WHERE id BETWEEN '1.1' AND '1.9';
-id
+Can't cast '1.1' from VARCHAR type to TINYINT type.
 SELECT * from t_tinyint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
-drop table t1;
+Can't cast '1.1e0' from VARCHAR type to TINYINT type.
 CREATE TABLE t1 (a TINYINT);
 INSERT INTO t1 VALUES (1);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;

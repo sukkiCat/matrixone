@@ -16,6 +16,7 @@ package tables
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync/atomic"
 	"time"
 
@@ -36,18 +37,23 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file      file.Block
-	block     *dataBlock
-	data      *containers.Batch
-	rows      uint32
-	mgr       base.INodeManager
-	flushTs   uint64
-	ckpTs     uint64
+	file    file.Block
+	block   *dataBlock
+	data    *containers.Batch
+	rows    uint32
+	mgr     base.INodeManager
+	flushTS atomic.Value
+	//mu      struct {
+	//	sync.RWMutex
+	//	flushTS types.TS
+	//}
+
+	// ckpTs     uint64 // unused
 	exception *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
-	flushTs, err := file.ReadTS()
+	flushTS, err := file.ReadTS()
 	if err != nil {
 		panic(err)
 	}
@@ -61,7 +67,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
-	impl.flushTs = flushTs
+	impl.flushTS.Store(flushTS)
 	impl.rows = file.ReadRows()
 	mgr.RegisterNode(impl)
 	return impl
@@ -131,12 +137,12 @@ func (node *appendableNode) GetColumnDataCopy(
 	return
 }
 
-func (node *appendableNode) SetBlockMaxFlushTS(ts uint64) {
-	atomic.StoreUint64(&node.flushTs, ts)
+func (node *appendableNode) SetBlockMaxflushTS(ts types.TS) {
+	node.flushTS.Store(ts)
 }
 
-func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
-	return atomic.LoadUint64(&node.flushTs)
+func (node *appendableNode) GetBlockMaxflushTS() types.TS {
+	return node.flushTS.Load().(types.TS)
 }
 
 func (node *appendableNode) OnLoad() {
@@ -161,17 +167,17 @@ func (node *appendableNode) OnLoad() {
 	}
 }
 
-func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (err error) {
+func (node *appendableNode) flushData(ts types.TS, colsData *containers.Batch, opCtx Operation) (err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Error("[Exception]", common.ExceptionField(exception))
 		err = exception.(error)
 		return
 	}
 	mvcc := node.block.mvcc
-	if node.GetBlockMaxFlushTS() == ts {
+	if node.GetBlockMaxflushTS().Equal(ts) {
 		err = data.ErrStaleRequest
 		logutil.Info("[Done]", common.TimestampField(ts),
-			common.OperationField("flush"),
+			common.OperationField(opCtx.OpName()),
 			common.ErrorField(err),
 			common.ReasonField("already flushed"),
 			common.OperandField(node.block.meta.AsCommonID().String()))
@@ -199,13 +205,13 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (er
 		return
 	}
 	deleteChain := mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(ts, false)
+	n, err := deleteChain.CollectDeletesLocked(ts, false, mvcc.RWMutex)
 	mvcc.RUnlock()
 	if err != nil {
 		return
 	}
 	dnode := n.(*updates.DeleteNode)
-	logutil.Info("[Running]", common.OperationField("flush"),
+	logutil.Info("[Running]", common.OperationField(opCtx.OpName()),
 		common.OperandField(node.block.meta.AsCommonID().String()),
 		common.TimestampField(ts))
 	var deletes *roaring.Bitmap
@@ -236,7 +242,7 @@ func (node *appendableNode) OnUnload() {
 	}
 	ts := node.block.mvcc.LoadMaxVisible()
 	needCkp := true
-	if err := node.flushData(ts, node.data); err != nil {
+	if err := node.flushData(ts, node.data, new(unloadOp)); err != nil {
 		needCkp = false
 		if err == data.ErrStaleRequest {
 			// err = nil
@@ -290,13 +296,13 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	return
 }
 
-func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
 	if err != nil {
 		return
 	}
 	defer col.Close()
-	vec := node.data.Vecs[node.block.meta.GetSchema().HiddenKey.Idx]
+	vec := node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
 	node.block.Lock()
 	vec.Extend(col)
 	node.block.Unlock()
@@ -313,7 +319,7 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		if def.IsHidden() {
+		if def.IsPhyAddr() {
 			continue
 		}
 		destVec := node.data.Vecs[def.Idx]
@@ -321,7 +327,7 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 		destVec.Extend(bat.Vecs[srcPos])
 		node.block.Unlock()
 	}
-	if err = node.FillHiddenColumn(uint32(from), uint32(bat.Length())); err != nil {
+	if err = node.FillPhyAddrColumn(uint32(from), uint32(bat.Length())); err != nil {
 		return
 	}
 	node.rows += uint32(bat.Length())

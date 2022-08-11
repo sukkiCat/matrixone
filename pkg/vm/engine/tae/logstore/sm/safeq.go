@@ -91,6 +91,7 @@ func (q *safeQueue) Start() {
 func (q *safeQueue) Stop() {
 	q.stopReceiver()
 	q.waitStop()
+	close(q.queue)
 }
 
 func (q *safeQueue) stopReceiver() {
@@ -128,12 +129,12 @@ func (q *safeQueue) waitStop() {
 func (q *safeQueue) Enqueue(item any) (any, error) {
 	state := atomic.LoadInt32(&q.state)
 	if state != Running {
-		return item, common.ClosedErr
+		return item, common.ErrClose
 	}
 	atomic.AddInt64(&q.pending, int64(1))
 	if atomic.LoadInt32(&q.state) != Running {
 		atomic.AddInt64(&q.pending, int64(-1))
-		return item, common.ClosedErr
+		return item, common.ErrClose
 	}
 	q.queue <- item
 	return item, nil

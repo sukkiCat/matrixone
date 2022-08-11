@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,7 +27,7 @@ import (
 type columnBlock struct {
 	common.RefHelper
 	block   *blockFile
-	ts      uint64
+	ts      types.TS
 	indexes []*indexFile
 	updates *updatesFile
 	data    *dataFile
@@ -63,14 +64,18 @@ func (cb *columnBlock) AddIndex(idx int) {
 	}
 }
 
-func (cb *columnBlock) WriteTS(ts uint64) (err error) {
+func (cb *columnBlock) WriteTS(ts types.TS) (err error) {
 	cb.ts = ts
 	cb.data.SetFile(
-		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)),
+		//cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)),
+		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%s.blk", cb.col,
+			cb.block.id, ts.ToString())),
 		uint32(len(cb.block.columns)),
 		uint32(len(cb.indexes)))
 	cb.updates.SetFile(
-		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)),
+		//cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)),
+		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%s.update", cb.col,
+			cb.block.id, ts.ToString())),
 		uint32(len(cb.block.columns)),
 		uint32(len(cb.indexes)))
 	return
@@ -96,7 +101,7 @@ func (cb *columnBlock) WriteIndex(idx int, buf []byte) (err error) {
 	return
 }
 
-func (cb *columnBlock) ReadTS() uint64 { return cb.ts }
+func (cb *columnBlock) ReadTS() types.TS { return cb.ts }
 
 func (cb *columnBlock) ReadData(buf []byte) (err error) {
 	_, err = cb.data.Read(buf)
@@ -160,22 +165,12 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.data.mutex.Lock()
-	files := cb.data.file
-	cb.data.file = nil
-	cb.data.mutex.Unlock()
-	if files != nil {
-		for _, file := range files {
-			file.Unref()
-		}
-	}
-
+	cb.data.Destroy()
+	cb.data = nil
 	for _, index := range cb.indexes {
-		for _, file := range index.dataFile.file {
-			file.Unref()
-		}
+		index.Destroy()
 	}
-	for _, update := range cb.updates.file {
-		update.Unref()
-	}
+	cb.indexes = nil
+	cb.updates.Destroy()
+	cb.updates = nil
 }

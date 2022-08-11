@@ -20,37 +20,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" + ")
+func String(_ any, buf *bytes.Buffer) {
+	buf.WriteString(" union all ")
 }
 
-func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.ctr = new(Container)
+func Prepare(_ *process.Process, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	ap := arg.(*Argument)
 	for {
 		if len(proc.Reg.MergeReceivers) == 0 {
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
-		reg := proc.Reg.MergeReceivers[n.ctr.i]
+		reg := proc.Reg.MergeReceivers[ap.ctr.i]
 		bat := <-reg.Ch
 		if bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:n.ctr.i], proc.Reg.MergeReceivers[n.ctr.i+1:]...)
-			if n.ctr.i >= len(proc.Reg.MergeReceivers) {
-				n.ctr.i = 0
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
+			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+				ap.ctr.i = 0
 			}
 			continue
 		}
-		if len(bat.Zs) == 0 {
+		if bat.Length() == 0 {
 			continue
 		}
-		proc.Reg.InputBatch = bat
-		if n.ctr.i = n.ctr.i + 1; n.ctr.i >= len(proc.Reg.MergeReceivers) {
-			n.ctr.i = 0
+		anal.Input(bat)
+		anal.Output(bat)
+		proc.SetInputBatch(bat)
+		if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(proc.Reg.MergeReceivers) {
+			ap.ctr.i = 0
 		}
 		return false, nil
 	}

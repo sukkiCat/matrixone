@@ -29,7 +29,7 @@ func newBlock(h handle.Block) *txnBlock {
 	}
 }
 
-func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
+func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
 	var view *model.ColumnView
 	var err error
 	bat := batch.New(true, attrs)
@@ -37,7 +37,9 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 	for i, attr := range attrs {
 		view, err = blk.handle.GetColumnDataByName(attr, deCompressed[i])
 		if err != nil {
-			view.Close()
+			if view != nil {
+				view.Close()
+			}
 			return nil, err
 		}
 		view.ApplyDeletes()
@@ -46,7 +48,6 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 		} else {
 			bat.Vecs[i] = VectorsToMO(view.GetData())
 		}
-		bat.Attrs[i] = attr
 		view.Close()
 	}
 	return bat, nil

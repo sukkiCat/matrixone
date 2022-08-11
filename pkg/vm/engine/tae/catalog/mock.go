@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -24,7 +25,7 @@ import (
 )
 
 func MockTxnFactory(catalog *Catalog) txnbase.TxnFactory {
-	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id uint64, ts uint64, info []byte) txnif.AsyncTxn {
+	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, id uint64, ts types.TS, info []byte) txnif.AsyncTxn {
 		txn := new(mockTxn)
 		txn.Txn = txnbase.NewTxn(mgr, store, id, ts, info)
 		txn.catalog = catalog
@@ -91,6 +92,10 @@ type mockTableHandle struct {
 	*txnbase.TxnRelation
 	catalog *Catalog
 	entry   *TableEntry
+}
+
+func (h *mockTableHandle) GetDB() (handle.Database, error) {
+	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*TableEntry).GetDB().GetName())
 }
 
 func newMockDBHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *DBEntry) *mockDBHandle {
@@ -201,8 +206,8 @@ func MockBatch(schema *Schema, rows int) *containers.Batch {
 		sortKey := schema.GetSingleSortKey()
 		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
 	} else if schema.IsCompoundSortKey() {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	} else {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	}
 }

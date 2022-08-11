@@ -42,7 +42,7 @@ func TestShuffleByDeletes(t *testing.T) {
 	deletes.Add(8)
 	deletes.Add(22)
 
-	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes)
+	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes, deletes)
 	t.Log(destMask.String())
 	t.Log(destVals)
 	t.Log(destDelets.String())
@@ -88,4 +88,12 @@ func TestAppendNull(t *testing.T) {
 	for _, typ := range colTypes {
 		check(typ)
 	}
+}
+
+func TestBinarySearch(t *testing.T) {
+	slice := []int{1, 2, 6, 9, 12}
+	pos := BinarySearch(slice, 3)
+	assert.Equal(t, -1, pos)
+	pos = BinarySearch(slice, 6)
+	assert.Equal(t, 2, pos)
 }

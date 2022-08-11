@@ -23,13 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-//RelationName counter for the new connection
+// RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
 // MOServer MatrixOne Server
 type MOServer struct {
 	addr string
 	app  goetty.NetApplication
+	rm   *RoutineManager
 }
 
 func (mo *MOServer) Start() error {
@@ -57,9 +58,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *MOServer {
+func NewMOServer(addr string, pu *config.ParameterUnit) *MOServer {
 	encoder, decoder := NewSqlCodec()
-	rm := NewRoutineManager(pu, pdHook)
+	rm := NewRoutineManager(pu)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(
@@ -74,5 +75,6 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 	return &MOServer{
 		addr: addr,
 		app:  app,
+		rm:   rm,
 	}
 }

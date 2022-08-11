@@ -20,6 +20,7 @@ package encoding
 import (
 	"bytes"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,8 +38,22 @@ func init() {
 	DateSize = int(unsafe.Sizeof(types.Date(0)))
 	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
 	TimestampSize = int(unsafe.Sizeof(types.Timestamp(0)))
-	Decimal64Size = int(unsafe.Sizeof(types.Decimal64(0)))
+	Decimal64Size = int(unsafe.Sizeof(types.Decimal64{}))
 	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
+}
+
+func EncodeSlice[T any](v []T, sz int) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
+	}
+	return
+}
+
+func DecodeSlice[T any](v []byte, sz int) (ret []T) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
+	}
+	return
 }
 
 func Encode(v interface{}) ([]byte, error) {
@@ -52,6 +67,19 @@ func Encode(v interface{}) ([]byte, error) {
 
 func Decode(data []byte, v interface{}) error {
 	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
+}
+
+func EncodeJson(v bytejson.ByteJson) ([]byte, error) {
+	//TODO handle error
+	buf, _ := v.Marshal()
+	return buf, nil
+}
+
+func DecodeJson(buf []byte) bytejson.ByteJson {
+	bj := bytejson.ByteJson{}
+	//TODO handle error
+	_ = bj.Unmarshal(buf)
+	return bj
 }
 
 func EncodeType(v types.Type) []byte {

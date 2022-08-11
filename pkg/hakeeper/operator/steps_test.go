@@ -1,3 +1,23 @@
+// Copyright 2020 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2021 Matrix Origin.
+//
+// Modified some tests.
+
 package operator
 
 import (
@@ -6,6 +26,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
+
+func TestIsFinish(t *testing.T) {
+	logState := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			Epoch:    1,
+		}},
+		Stores: nil,
+	}
+
+	dnState := pb.DNState{}
+
+	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
+	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
+	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
+	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
+}
 
 func TestAddLogService(t *testing.T) {
 	cases := []struct {
@@ -17,9 +55,10 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service completed",
 			command: AddLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -31,9 +70,10 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service not completed",
 			command: AddLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -60,9 +100,10 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service not completed",
 			command: RemoveLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -74,9 +115,11 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service completed",
 			command: RemoveLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
@@ -103,9 +146,11 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service not completed",
 			command: StartLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -117,9 +162,11 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service completed",
 			command: StartLogService{
-				StoreID:   "a",
-				ShardID:   1,
-				ReplicaID: 1,
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -152,8 +199,10 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service completed",
 			command: StopLogService{
-				StoreID: "a",
-				ShardID: 1,
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {
@@ -165,8 +214,10 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service not completed",
 			command: StopLogService{
-				StoreID: "a",
-				ShardID: 1,
+				Replica: Replica{
+					UUID:    "a",
+					ShardID: 1,
+				},
 			},
 			state: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{"a": {

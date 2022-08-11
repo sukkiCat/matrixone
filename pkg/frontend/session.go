@@ -15,48 +15,25 @@
 package frontend
 
 import (
-	goErrors "errors"
+	"context"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
-var (
-	errorTaeTxnBeginInBegan           = goErrors.New("begin txn in the began txn")
-	errorTaeTxnHasNotBeenBegan        = goErrors.New("the txn has not been began")
-	errorTaeTxnAutocommitInAutocommit = goErrors.New("start autocommit txn in the autocommit txn")
-	errorTaeTxnBeginInAutocommit      = goErrors.New("begin txn in the autocommit txn")
-	errorTaeTxnAutocommitInBegan      = goErrors.New("start autocommit txn in the txn has been began")
-	errorIsNotAutocommitTxn           = goErrors.New("it is not autocommit txn")
-	errorIsNotBeginCommitTxn          = goErrors.New("it is not the begin/commit txn ")
-	errorTaeTxnInIllegalState         = goErrors.New("the txn is in the illegal state and needed to be cleaned before using again")
-)
-
-const (
-	TxnInit       = iota // when the TxnState instance has just been created
-	TxnBegan             // when the txn has been started by the BEGIN statement
-	TxnAutocommit        // when the txn has been started by the automatic creation
-	TxnEnd               // when the txn has been committed by the COMMIT statement or the automatic commit or the ROLLBACK statement
-	TxnErr               // when the txn operation generates errors
-	TxnNil               // placeholder
-)
-
-// TxnState represents for Transaction Machine
-type TxnState struct {
-	state     int
-	fromState int
-	err       error
-}
+const MaxPrepareNumberInOneSession = 64
 
 type ShowStatementType int
 
@@ -67,99 +44,21 @@ const (
 	ShowColumns        ShowStatementType = 3
 )
 
-func InitTxnState() *TxnState {
-	return &TxnState{
-		state:     TxnInit,
-		fromState: TxnNil,
-		err:       nil,
-	}
-}
-
-func (ts *TxnState) isState(s int) bool {
-	return ts.state == s
-}
-
-func (ts *TxnState) switchToState(s int, err error) {
-	logutil.Infof("switch from %d to %d", ts.state, s)
-	ts.fromState = ts.state
-	ts.state = s
-	ts.err = err
-}
-
-func (ts *TxnState) getState() int {
-	return ts.state
-}
-
-func (ts *TxnState) getFromState() int {
-	return ts.fromState
-}
-
-func (ts *TxnState) getError() error {
-	return ts.err
-}
-
-func (ts *TxnState) String() string {
-	return fmt.Sprintf("state:%d fromState:%d err:%v", ts.state, ts.fromState, ts.err)
-}
-
-var _ moengine.Txn = &TaeTxnDumpImpl{}
-
-//TaeTxnDumpImpl is just a placeholder and does nothing
-type TaeTxnDumpImpl struct {
-}
-
-func InitTaeTxnDumpImpl() *TaeTxnDumpImpl {
-	return &TaeTxnDumpImpl{}
-}
-
-func (tti *TaeTxnDumpImpl) GetCtx() []byte {
-	return nil
-}
-
-func (tti *TaeTxnDumpImpl) GetID() uint64 {
-	return 0
-}
-
-func (tti *TaeTxnDumpImpl) Commit() error {
-	return nil
-}
-
-func (tti *TaeTxnDumpImpl) Rollback() error {
-	return nil
-}
-
-func (tti *TaeTxnDumpImpl) String() string {
-	return "TaeTxnDumpImpl"
-}
-
-func (tti *TaeTxnDumpImpl) Repr() string {
-	return "TaeTxnDumpImpl.Repr"
-}
-
-func (tti *TaeTxnDumpImpl) GetError() error {
-	return nil
-}
-
 type TxnHandler struct {
-	storage  engine.Engine
-	taeTxn   moengine.Txn
-	txnState *TxnState
+	storage engine.Engine
+	txn     moengine.Txn
+	ses     *Session
 }
 
 func InitTxnHandler(storage engine.Engine) *TxnHandler {
 	return &TxnHandler{
-		taeTxn:   InitTaeTxnDumpImpl(),
-		txnState: InitTxnState(),
-		storage:  storage,
+		storage: storage,
 	}
 }
 
 type Session struct {
 	//protocol layer
 	protocol Protocol
-
-	//epoch gc handler
-	pdHook *PDCallbackImpl
 
 	//cmd from the client
 	Cmd int
@@ -187,13 +86,28 @@ type Session struct {
 	sysVars         map[string]interface{}
 	userDefinedVars map[string]interface{}
 	gSysVars        *GlobalSystemVariables
+
+	//the server status
+	serverStatus uint16
+
+	//the option bits
+	optionBits uint32
+
+	prepareStmts map[string]*PrepareStmt
+
+	//it gets the result set from the pipeline and send it to the client
+	outputCallback func(interface{}, *batch.Batch) error
+
+	//all the result set of executing the sql in background task
+	allResultSet []*MysqlResultSet
+
+	tenant *TenantInfo
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
 	ses := &Session{
 		protocol: proto,
-		pdHook:   pdHook,
 		GuestMmu: gm,
 		Mempool:  mp,
 		Pu:       PU,
@@ -209,13 +123,66 @@ func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempo
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
+
+		serverStatus: 0,
+		optionBits:   0,
+
+		prepareStmts:   make(map[string]*PrepareStmt),
+		outputCallback: getDataFromPipeline,
 	}
+	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
+	ses.txnHandler.SetSession(ses)
 	return ses
 }
 
+func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
+	ses.Mrs = mrs
+}
+
+func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
+	return ses.Mrs
+}
+
+func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+	ses.allResultSet = append(ses.allResultSet, mrs)
+}
+
+func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
+	return ses.allResultSet
+}
+
+func (ses *Session) GetTenantInfo() *TenantInfo {
+	return ses.tenant
+}
+
+func (ses *Session) SetTenantInfo(ti *TenantInfo) {
+	ses.tenant = ti
+}
+
+func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
+	if _, ok := ses.prepareStmts[name]; !ok {
+		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
+			return errors.New("", fmt.Sprintf("more than '%d' prepare statement in one session", MaxPrepareNumberInOneSession))
+		}
+	}
+	ses.prepareStmts[name] = prepareStmt
+	return nil
+}
+
+func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
+	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+		return prepareStmt, nil
+	}
+	return nil, errors.New("", fmt.Sprintf("prepare statement '%s' does not exist", name))
+}
+
+func (ses *Session) RemovePrepareStmt(name string) {
+	delete(ses.prepareStmts, name)
+}
+
 // SetGlobalVar sets the value of system variable in global.
-//used by SET GLOBAL
+// used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 	return ses.gSysVars.SetGlobalSysVar(name, value)
 }
@@ -223,7 +190,7 @@ func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeSession {
+		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, errorSystemVariableSessionEmpty
 		}
@@ -239,19 +206,19 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
 		}
 		//scope session & both
-		if !def.Dynamic {
+		if !def.GetDynamic() {
 			return errorSystemVariableIsReadOnly
 		}
 
-		cv, err := def.Type.Convert(value)
+		cv, err := def.GetType().Convert(value)
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.Name] = cv
+		ses.sysVars[def.GetName()] = cv
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -262,7 +229,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return gVal, nil
 		}
 		return ses.sysVars[ciname], nil
@@ -298,10 +265,6 @@ func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
 }
 
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
-}
-
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
 	return ses.txnCompileCtx
 }
@@ -332,46 +295,292 @@ func (ses *Session) SetDatabaseName(db string) {
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
+func (ses *Session) DatabaseNameIsEmpty() bool {
+	return len(ses.GetDatabaseName()) == 0
+}
+
 func (ses *Session) GetUserName() string {
 	return ses.protocol.GetUserName()
 }
 
+func (ses *Session) SetUserName(uname string) {
+	ses.protocol.SetUserName(uname)
+}
+
+func (ses *Session) GetConnectionID() uint32 {
+	return ses.protocol.ConnectionID()
+}
+
+func (ses *Session) SetOptionBits(bit uint32) {
+	ses.optionBits |= bit
+}
+
+func (ses *Session) ClearOptionBits(bit uint32) {
+	ses.optionBits &= ^bit
+}
+
+func (ses *Session) OptionBitsIsSet(bit uint32) bool {
+	return ses.optionBits&bit != 0
+}
+
+func (ses *Session) SetServerStatus(bit uint16) {
+	ses.serverStatus |= bit
+}
+
+func (ses *Session) ClearServerStatus(bit uint16) {
+	ses.serverStatus &= ^bit
+}
+
+func (ses *Session) ServerStatusIsSet(bit uint16) bool {
+	return ses.serverStatus&bit != 0
+}
+
+/*
+InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
+OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is
+started implicitly by the first statement of the transaction.
+OPTION_BEGAN: Whenever the autocommit is on or off, the multi-statement transaction is
+started explicitly by the BEGIN statement.
+
+But it does not denote the transaction is active or not.
+*/
+func (ses *Session) InMultiStmtTransactionMode() bool {
+	return ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)
+}
+
+/*
+InActiveMultiStmtTransaction checks the session is in multi-statement transaction mode
+and there is an active transaction.
+
+But sometimes, the session does not start an active transaction even if it is in multi-
+statement transaction mode.
+
+For example: there is no active transaction.
+set autocommit = 0;
+select 1;
+
+For example: there is an active transaction.
+begin;
+select 1;
+
+When the statement starts the multi-statement transaction(select * from table), this flag
+won't be set until we access the tables.
+*/
+func (ses *Session) InActiveMultiStmtTransaction() bool {
+	return ses.ServerStatusIsSet(SERVER_STATUS_IN_TRANS)
+}
+
+/*
+TxnStart starts the transaction implicitly and idempotent
+
+When it is in multi-statement transaction mode:
+
+	Set SERVER_STATUS_IN_TRANS bit;
+	Starts a new transaction if there is none. Reuse the current transaction if there is one.
+
+When it is not in single statement transaction mode:
+
+	Starts a new transaction if there is none. Reuse the current transaction if there is one.
+*/
+func (ses *Session) TxnStart() error {
+	var err error
+	if ses.InMultiStmtTransactionMode() {
+		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
+	}
+	if !ses.txnHandler.IsValidTxn() {
+		err = ses.txnHandler.NewTxn()
+	}
+	return err
+}
+
+/*
+TxnCommitSingleStatement commits the single statement transaction.
+*/
+func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
+	var err error
+	/*
+		Commit Rules:
+		1, if it is in single-statement mode:
+			it commits.
+		2, if it is in multi-statement mode:
+			if the statement is the one can be executed in the active transaction,
+				the transaction need to be committed at the end of the statement.
+	*/
+	if !ses.InMultiStmtTransactionMode() ||
+		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		err = ses.txnHandler.CommitTxn()
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+	}
+	return err
+}
+
+/*
+TxnRollbackSingleStatement rollbacks the single statement transaction.
+*/
+func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
+	var err error
+	/*
+		Rollback Rules:
+		1, if it is in single-statement mode:
+			it rollbacks.
+		2, if it is in multi-statement mode:
+			if the statement is the one can be executed in the active transaction,
+				the transaction need to be rollback at the end of the statement.
+	*/
+	if !ses.InMultiStmtTransactionMode() ||
+		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		err = ses.txnHandler.RollbackTxn()
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+	}
+	return err
+}
+
+/*
+TxnBegin begins a new transaction.
+It commits the current transaction implicitly.
+*/
+func (ses *Session) TxnBegin() error {
+	var err error
+	if ses.InMultiStmtTransactionMode() {
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		err = ses.txnHandler.CommitTxn()
+	}
+	ses.ClearOptionBits(OPTION_BEGIN)
+	if err != nil {
+		return err
+	}
+	ses.SetOptionBits(OPTION_BEGIN)
+	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
+	err = ses.txnHandler.NewTxn()
+	return err
+}
+
+// TxnCommit commits the current transaction.
+func (ses *Session) TxnCommit() error {
+	var err error
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
+	err = ses.txnHandler.CommitTxn()
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
+	return err
+}
+
+// TxnRollback rollbacks the current transaction.
+func (ses *Session) TxnRollback() error {
+	var err error
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
+	err = ses.txnHandler.RollbackTxn()
+	ses.ClearOptionBits(OPTION_BEGIN)
+	return err
+}
+
+/*
+InActiveTransaction checks if it is in an active transaction.
+*/
+func (ses *Session) InActiveTransaction() bool {
+	if ses.InActiveMultiStmtTransaction() {
+		return true
+	} else {
+		return ses.txnHandler.IsValidTxn()
+	}
+}
+
+/*
+SetAutocommit sets the value of the system variable 'autocommit'.
+
+The rule is that we can not execute the statement 'set parameter = value' in
+an active transaction whichever it is started by BEGIN or in 'set autocommit = 0;'.
+*/
+func (ses *Session) SetAutocommit(on bool) error {
+	if ses.InActiveTransaction() {
+		return errorParameterModificationInTxn
+	}
+	if on {
+		ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
+		ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
+	} else {
+		ses.ClearServerStatus(SERVER_STATUS_AUTOCOMMIT)
+		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+	}
+	return nil
+}
+
+func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+	ses.outputCallback = callback
+}
+
+// AuthenticateUser verifies the password of the user.
+func (ses *Session) AuthenticateUser(userInput string) error {
+	//Get tenant info
+	tenant, err := GetTenantInfo(userInput)
+	if err != nil {
+		return err
+	}
+
+	ses.SetTenantInfo(tenant)
+
+	//Get the password of the user in an independent session
+	err = executeSQLInBackgroundSession(ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
+	return err
+}
+
+func (th *TxnHandler) SetSession(ses *Session) {
+	th.ses = ses
+}
+
+// NewTxn commits the old transaction if it existed.
+// Then it creates the new transaction.
+func (th *TxnHandler) NewTxn() error {
+	var err error
+	if th.IsValidTxn() {
+		err = th.CommitTxn()
+		if err != nil {
+			return err
+		}
+	}
+	th.SetInvalid()
+	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
+		//begin a transaction
+		th.txn, err = taeEng.StartTxn(nil)
+		if err != nil {
+			logutil.Errorf("start tae txn error:%v", err)
+			return err
+		}
+	}
+	return err
+}
+
+// IsValidTxn checks the transaction is true or not.
+func (th *TxnHandler) IsValidTxn() bool {
+	return th.txn != nil
+}
+
+func (th *TxnHandler) SetInvalid() {
+	th.txn = nil
+}
+
+func (th *TxnHandler) CommitTxn() error {
+	if !th.IsValidTxn() {
+		return nil
+	}
+	err := th.txn.Commit()
+	th.SetInvalid()
+	return err
+}
+
+func (th *TxnHandler) RollbackTxn() error {
+	if !th.IsValidTxn() {
+		return nil
+	}
+	err := th.txn.Rollback()
+	th.SetInvalid()
+	return err
+}
+
 func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
-}
-
-func (th *TxnHandler) getTxnState() int {
-	return th.txnState.getState()
-}
-
-func (th *TxnHandler) isTxnState(s int) bool {
-	return th.txnState.isState(s)
-}
-
-func (th *TxnHandler) switchToTxnState(s int, err error) {
-	th.txnState.switchToState(s, err)
-}
-
-func (th *TxnHandler) getFromTxnState() int {
-	return th.txnState.getFromState()
-}
-
-func (th *TxnHandler) getTxnStateError() error {
-	return th.txnState.getError()
-}
-
-func (th *TxnHandler) getTxnStateString() string {
-	return th.txnState.String()
-}
-
-// IsInTaeTxn checks the session executes a txn
-func (th *TxnHandler) IsInTaeTxn() bool {
-	st := th.getTxnState()
-	logutil.Infof("current txn state %d", st)
-	if st == TxnAutocommit || st == TxnBegan {
-		return true
-	}
-	return false
 }
 
 func (th *TxnHandler) IsTaeEngine() bool {
@@ -379,209 +588,12 @@ func (th *TxnHandler) IsTaeEngine() bool {
 	return ok
 }
 
-func (th *TxnHandler) createTxn(beganErr, autocommitErr error) (moengine.Txn, error) {
-	var err error
-	var txn moengine.Txn
-	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
-		switch th.txnState.getState() {
-		case TxnInit, TxnEnd:
-			//begin a transaction
-			txn, err = taeEng.StartTxn(nil)
-		case TxnBegan:
-			err = beganErr
-		case TxnAutocommit:
-			err = autocommitErr
-		case TxnErr:
-			err = errorTaeTxnInIllegalState
-		}
-		if txn == nil {
-			txn = InitTaeTxnDumpImpl()
-		}
-	} else {
-		txn = InitTaeTxnDumpImpl()
-	}
-
-	return txn, err
-}
-
-func (th *TxnHandler) StartByBegin() error {
-	logutil.Infof("start txn by begin")
-	var err error
-	th.taeTxn, err = th.createTxn(errorTaeTxnBeginInBegan, errorTaeTxnBeginInAutocommit)
-	if err == nil {
-		th.txnState.switchToState(TxnBegan, err)
-	} else {
-		th.txnState.switchToState(TxnErr, err)
-	}
-	return err
-}
-
-func (th *TxnHandler) StartByAutocommit() error {
-	logutil.Infof("start txn by autocommit")
-	var err error
-	th.taeTxn, err = th.createTxn(errorTaeTxnAutocommitInBegan, errorTaeTxnAutocommitInAutocommit)
-	if err == nil {
-		th.txnState.switchToState(TxnAutocommit, err)
-	} else {
-		th.txnState.switchToState(TxnErr, err)
-	}
-	return err
-}
-
-// StartByAutocommitIfNeeded starts a new txn or uses an existed txn
-// true denotes a new txn
-func (th *TxnHandler) StartByAutocommitIfNeeded() (bool, error) {
-	logutil.Infof("start txn autocommit if needed")
-	var err error
-	if th.IsInTaeTxn() {
-		return false, nil
-	}
-	logutil.Infof("need create new txn")
-	err = th.StartByAutocommit()
-	return true, err
-}
-
 func (th *TxnHandler) GetTxn() moengine.Txn {
-	return th.taeTxn
-}
-
-const (
-	TxnCommitAfterBegan = iota
-	TxnCommitAfterAutocommit
-	TxnCommitAfterAutocommitOnly
-)
-
-func (th *TxnHandler) commit(option int) error {
-	var err error
-	var switchTxnState bool = true
-	switch th.getTxnState() {
-	case TxnBegan:
-		switch option {
-		case TxnCommitAfterBegan:
-			err = th.taeTxn.Commit()
-		case TxnCommitAfterAutocommit:
-			err = errorIsNotAutocommitTxn
-		case TxnCommitAfterAutocommitOnly:
-			//if it is the txn started by BEGIN statement,
-			//we do not commit it.
-			switchTxnState = false
-		}
-	case TxnAutocommit:
-		switch option {
-		case TxnCommitAfterBegan:
-			err = errorIsNotBeginCommitTxn
-		case TxnCommitAfterAutocommit, TxnCommitAfterAutocommitOnly:
-			err = th.taeTxn.Commit()
-		}
-	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
-	case TxnErr:
-		err = errorTaeTxnInIllegalState
+	err := th.ses.TxnStart()
+	if err != nil {
+		panic(err)
 	}
-
-	if switchTxnState {
-		if err == nil {
-			th.txnState.switchToState(TxnEnd, err)
-		} else {
-			th.txnState.switchToState(TxnErr, err)
-		}
-	}
-	return err
-}
-
-// CommitAfterBegin commits the tae txn started by the BEGIN statement
-func (th *TxnHandler) CommitAfterBegin() error {
-	logutil.Infof("commit began")
-	var err error
-	err = th.commit(TxnCommitAfterBegan)
-	return err
-}
-
-// CommitAfterAutocommit commits the tae txn started by autocommit
-func (th *TxnHandler) CommitAfterAutocommit() error {
-	logutil.Infof("commit autocommit")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommit)
-	return err
-}
-
-// CommitAfterAutocommitOnly commits the tae txn started by autocommit
-// Do not check TxnBegan
-func (th *TxnHandler) CommitAfterAutocommitOnly() error {
-	logutil.Infof("commit autocommit only")
-	var err error
-	err = th.commit(TxnCommitAfterAutocommitOnly)
-	return err
-}
-
-const (
-	TxnRollbackAfterBeganAndAutocommit = iota
-	TxnRollbackAfterAutocommitOnly
-)
-
-func (th *TxnHandler) rollback(option int) error {
-	var err error
-	var switchTxnState bool = true
-	switch th.getTxnState() {
-	case TxnBegan:
-		switch option {
-		case TxnRollbackAfterBeganAndAutocommit:
-			err = th.taeTxn.Rollback()
-		case TxnRollbackAfterAutocommitOnly:
-			//if it is the txn started by BEGIN statement,
-			//we do not commit it.
-			switchTxnState = false
-		}
-	case TxnAutocommit:
-		switch option {
-		case TxnRollbackAfterBeganAndAutocommit, TxnRollbackAfterAutocommitOnly:
-			err = th.taeTxn.Rollback()
-		}
-	case TxnInit, TxnEnd:
-		err = errorTaeTxnHasNotBeenBegan
-	case TxnErr:
-		err = errorTaeTxnInIllegalState
-	}
-
-	if switchTxnState {
-		if err == nil {
-			th.txnState.switchToState(TxnEnd, err)
-		} else {
-			th.txnState.switchToState(TxnErr, err)
-		}
-	}
-
-	return err
-}
-
-func (th *TxnHandler) Rollback() error {
-	logutil.Infof("rollback ")
-	var err error
-	err = th.rollback(TxnRollbackAfterBeganAndAutocommit)
-	return err
-}
-
-func (th *TxnHandler) RollbackAfterAutocommitOnly() error {
-	logutil.Infof("rollback autocommit only")
-	var err error
-	err = th.rollback(TxnRollbackAfterAutocommitOnly)
-	return err
-}
-
-//CleanTxn just cleans the txn when the errors happen during the txn operations.
-// It does not commit any txn.
-func (th *TxnHandler) CleanTxn() error {
-	logutil.Infof("clean tae txn")
-	switch th.txnState.getState() {
-	case TxnInit, TxnEnd:
-		th.taeTxn = InitTaeTxnDumpImpl()
-		th.txnState.switchToState(TxnInit, nil)
-	case TxnErr:
-		logutil.Errorf("clean txn. Get error:%v txnError:%v", th.txnState.getError(), th.taeTxn.GetError())
-		th.taeTxn = InitTaeTxnDumpImpl()
-		th.txnState.switchToState(TxnInit, nil)
-	}
-	return nil
+	return th.txn
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -602,9 +614,6 @@ type TxnCompilerContext struct {
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
-	if len(db) == 0 {
-		db = "mo_catalog"
-	}
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
 
@@ -627,7 +636,8 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(name, tcc.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	_, err = tcc.txnHandler.GetStorage().Database(ctx, name, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -636,29 +646,59 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
+		return nil, err
 	}
 
+	ctx := context.TODO()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, engine.Snapshot(tcc.txnHandler.GetTxn().GetCtx()))
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
-		return nil, nil
+		return nil, err
 	}
 
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	tableNames, err := db.Relations(ctx)
+	if err != nil {
+		return nil, err
+	}
 	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	table, err := db.Relation(ctx, tableName)
 	if err != nil {
 		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil, err
+	}
+	return table, nil
+}
+
+func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+	if len(dbName) == 0 {
+		return "", NewMysqlError(ER_NO_DB_ERROR)
+	}
+	return dbName, nil
+}
+
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
 		return nil, nil
 	}
-
-	engineDefs := table.TableDefs(tcc.txnHandler.GetTxn().GetCtx())
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
+		return nil, nil
+	}
+	ctx := context.TODO()
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, nil
+	}
 
 	var defs []*plan2.ColDef
 	for _, def := range engineDefs {
@@ -672,12 +712,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
-				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
+				Default: attr.Attr.Default,
 			})
 		}
 	}
 	if tcc.QryTyp != TXN_DEFAULT {
-		hideKey := table.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+		hideKeys, err := table.GetHideKeys(ctx)
+		if err != nil {
+			return nil, nil
+		}
+		hideKey := hideKeys[0]
 		defs = append(defs, &plan2.ColDef{
 			Name: hideKey.Name,
 			Typ: &plan2.Type{
@@ -717,33 +761,25 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil
+	}
+	relation, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
 		return nil
 	}
 
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	priKeys, err := relation.GetPrimaryKeys(ctx)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
-
-	priKeys := relation.GetPrimaryKeys(tcc.txnHandler.GetTxn().GetCtx())
 	if len(priKeys) == 0 {
 		return nil
 	}
 
-	var priDefs []*plan2.ColDef = nil
+	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
@@ -761,31 +797,24 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	ctx := context.TODO()
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil
 	}
-
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
 
-	hideKey := relation.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
-	if hideKey == nil {
+	hideKeys, err := relation.GetHideKeys(ctx)
+	if err != nil {
 		return nil
 	}
+	if len(hideKeys) == 0 {
+		return nil
+	}
+	hideKey := hideKeys[0]
 
 	hideDef := &plan2.ColDef{
 		Name: hideKey.Name,
@@ -802,5 +831,71 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 }
 
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {
-	return &plan2.Cost{}
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
+	if err != nil {
+		return nil
+	}
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
+		return nil
+	}
+	rows := table.Rows()
+	return &plan2.Cost{Card: float64(rows)}
+}
+
+// fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
+// It will not send the result to the client.
+func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
+	if handle == nil || dataSet == nil {
+		return nil
+	}
+
+	ses := handle.(*Session)
+	oq := newFakeOutputQueue(ses.GetMysqlResultSet())
+	n := vector.Length(dataSet.Vecs[0])
+	for j := 0; j < n; j++ { //row index
+		if dataSet.Zs[j] <= 0 {
+			continue
+		}
+		_, err := extractRowFromEveryVector(dataSet, int64(j), oq)
+		if err != nil {
+			return err
+		}
+	}
+	err := oq.flush()
+	if err != nil {
+		return err
+	}
+	ses.AppendMysqlResultSetOfBackgroundTask(ses.GetMysqlResultSet())
+	return nil
+}
+
+// executeSQLInBackgroundSession executes the sql in an independent session and transaction.
+// It sends nothing to the client.
+func executeSQLInBackgroundSession(gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
+	mce := NewMysqlCmdExecutor()
+	defer mce.Close()
+	ses := NewSession(&FakeProtocol{}, gm, mp, pu, gSysVariables)
+	ses.SetOutputCallback(fakeDataSetFetcher)
+	mce.PrepareSessionBeforeExecRequest(ses)
+	err := mce.doComQuery(sql)
+	if err != nil {
+		return err
+	}
+	//get the result set
+	//TODO: debug further
+	//mrsArray := ses.GetAllMysqlResultSet()
+	//for _, mrs := range mrsArray {
+	//	for i := uint64(0); i < mrs.GetRowCount(); i++ {
+	//		row, err := mrs.GetRow(i)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		fmt.Println(row)
+	//	}
+	//}
+
+	return nil
 }

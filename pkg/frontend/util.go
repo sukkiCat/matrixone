@@ -17,11 +17,15 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -41,8 +45,8 @@ type CloseFlag struct {
 	closed uint32
 }
 
-//1 for closed
-//0 for others
+// 1 for closed
+// 0 for others
 func (cf *CloseFlag) setClosed(value uint32) {
 	atomic.StoreUint32(&cf.closed, value)
 }
@@ -212,7 +216,8 @@ func (t *Timeout) UpdateTime(tn time.Time) {
 
 /*
 ----------+---------+------------------+--------
-      lastTime     Now         lastTime + timeGap
+
+	lastTime     Now         lastTime + timeGap
 
 return true  :  is timeout. the lastTime has been updated.
 return false :  is not timeout. the lastTime has not been updated.
@@ -290,116 +295,6 @@ func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	return ps
 }
 
-var (
-	tmpDir = "./cube-test"
-)
-
-func cleanupTmpDir() error {
-	return os.RemoveAll(tmpDir)
-}
-
-/*
-type FrontendStub struct{
-	eng engine.Engine
-	srv rpcserver.Server
-	mo *MOServer
-	kvForEpochgc storage.Storage
-	wg sync.WaitGroup
-	cf *CloseFlag
-	pci *PDCallbackImpl
-	proc *process.Process
-}
-
-func NewFrontendStub() (*FrontendStub,error) {
-	e, srv, err, proc := getMemEngineAndComputationEngine()
-	if err != nil {
-		return nil,err
-	}
-
-	pci := getPCI()
-	mo, err := getMOserver("./test/system_vars_config.toml",
-		6002, pci , e)
-
-	if err != nil {
-		return nil, err
-	}
-
-	err = mo.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	return &FrontendStub{
-		eng: e,
-		srv: srv,
-		mo: mo,
-		kvForEpochgc: storage.NewTestStorage(),
-		cf:&CloseFlag{},
-		pci:pci,
-		proc:proc,
-	},nil
-}
-
-func StartFrontendStub(fs *FrontendStub) error {
-	return fs.pci.Start(fs.kvForEpochgc)
-}
-
-func CloseFrontendStub(fs *FrontendStub) error {
-	err := fs.mo.Stop()
-	if err != nil {
-		return err
-	}
-
-	fs.srv.Stop()
-	return fs.pci.Stop(fs.kvForEpochgc)
-}
-*/
-
-var testPorts = []int{6002, 6003, 6004}
-var testConfigFile = "./test/system_vars_config.toml"
-
-/*
-func getMemEngineAndComputationEngine() (engine.Engine, rpcserver.Server, error, *process.Process) {
-	e, err := testutil.NewTestEngine()
-	if err != nil {
-		return nil, nil, err, nil
-	}
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	proc := process.New(mheap.New(gm))
-	{
-		proc.Id = "0"
-		proc.Lim.Size = 10 << 32
-		proc.Lim.BatchRows = 10 << 32
-		proc.Lim.PartitionRows = 10 << 32
-	}
-
-	srv, err := testutil.NewTestServer(e, proc)
-	if err != nil {
-		return nil, nil, err, nil
-	}
-
-	go srv.Run()
-	return e, srv, err, proc
-}
-*/
-
-func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
-	pu, err := getParameterUnit(configFile, eng)
-	if err != nil {
-		return nil, err
-	}
-
-	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
-	sver := NewMOServer(address, pu, pd)
-	return sver, nil
-}
-
-func getPCI() *PDCallbackImpl {
-	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
-	return NewPDCallbackImpl(ppu)
-}
-
 func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	sv := &mo_config.SystemVariables{}
 	var err error
@@ -427,7 +322,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{})
 
 	return pu, nil
 }
@@ -439,7 +334,7 @@ func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeD
 				Name:    attr.AttributeName,
 				Alg:     0,
 				Type:    attr.AttributeType,
-				Default: engine.DefaultExpr{},
+				Default: &plan.Default{},
 			}}
 	}
 
@@ -455,7 +350,7 @@ func toTypesType(t types.T) types.Type {
 }
 
 func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.AttributeDef, rowCount int) *batch.Batch {
-	var attributeNames []string = make([]string, len(attributeDefs))
+	var attributeNames = make([]string, len(attributeDefs))
 	for i, def := range attributeDefs {
 		attributeNames[i] = def.Attr.Name
 	}
@@ -472,6 +367,9 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 		vec.Or = true
 		vec.Data = nil
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_bool).Size))
+			vec.Col = encoding.DecodeBoolSlice(vec.Data)
 		case types.T_int8:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_int8).Size))
 			vec.Col = encoding.DecodeInt8Slice(vec.Data)
@@ -502,7 +400,7 @@ func AllocateBatchBasedOnEngineAttributeDefinition(attributeDefs []*engine.Attri
 		case types.T_float64:
 			vec.Data = make([]byte, rowCount*int(toTypesType(types.T_float64).Size))
 			vec.Col = encoding.DecodeFloat64Slice(vec.Data)
-		case types.T_char, types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, rowCount),
 				Lengths: make([]uint32, rowCount),
@@ -535,6 +433,17 @@ func FillBatchWithData(data [][]string, batch *batch.Batch) {
 			vec := batch.Vecs[colIdx]
 
 			switch vec.Typ.Oid {
+			case types.T_bool:
+				cols := vec.Col.([]bool)
+				if isNullOrEmpty {
+					nulls.Add(vec.Nsp, uint64(rowIdx))
+				} else {
+					d, err := types.ParseBool(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+					}
+					cols[rowIdx] = d
+				}
 			case types.T_int8:
 				cols := vec.Col.([]int8)
 				if isNullOrEmpty {
@@ -656,7 +565,7 @@ func FillBatchWithData(data [][]string, batch *batch.Batch) {
 					}
 					cols[rowIdx] = d
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_json:
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -706,6 +615,18 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 	for i := 0; i < len(bat.Vecs); i++ {
 		vec := bat.Vecs[i]
 		switch vec.Typ.Oid { //get col
+		case types.T_bool:
+			if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				vs := vec.Col.([]bool)
+				row[i] = vs[rowIndex]
+			} else {
+				if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+					row[i] = nil
+				} else {
+					vs := vec.Col.([]bool)
+					row[i] = vs[rowIndex]
+				}
+			}
 		case types.T_int8:
 			if !nulls.Any(vec.Nsp) { //all data in this column are not null
 				vs := vec.Col.([]int8)
@@ -826,19 +747,7 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 					row[i] = vs[rowIndex]
 				}
 			}
-		case types.T_char:
-			if !nulls.Any(vec.Nsp) { //all data in this column are not null
-				vs := vec.Col.(*types.Bytes)
-				row[i] = string(vs.Get(int64(rowIndex)))
-			} else {
-				if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-					row[i] = nil
-				} else {
-					vs := vec.Col.(*types.Bytes)
-					row[i] = string(vs.Get(int64(rowIndex)))
-				}
-			}
-		case types.T_varchar:
+		case types.T_char, types.T_varchar, types.T_json:
 			if !nulls.Any(vec.Nsp) { //all data in this column are not null
 				vs := vec.Col.(*types.Bytes)
 				row[i] = string(vs.Get(int64(rowIndex)))
@@ -886,8 +795,8 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 // pattern and target are ascii characters
 // TODO: add \_ and \%
 func WildcardMatch(pattern, target string) bool {
-	var p int = 0
-	var t int = 0
+	var p = 0
+	var t = 0
 	var positionOfPercentPlusOne int = -1
 	var positionOfTargetEncounterPercent int = -1
 	plen := len(pattern)
@@ -926,4 +835,46 @@ func WildcardMatch(pattern, target string) bool {
 		p++
 	}
 	return p >= plen
+}
+
+// only support single value and unary minus
+func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+	var value interface{}
+	switch v := e.(type) {
+	case *tree.NumVal:
+		switch v.Value.Kind() {
+		case constant.Unknown:
+			value = nil
+		case constant.Bool:
+			value = constant.BoolVal(v.Value)
+		case constant.String:
+			value = constant.StringVal(v.Value)
+		case constant.Int:
+			value, _ = constant.Int64Val(v.Value)
+		case constant.Float:
+			value, _ = constant.Float64Val(v.Value)
+		default:
+			return nil, errorNumericTypeIsNotSupported
+		}
+	case *tree.UnaryExpr:
+		ival, err := GetSimpleExprValue(v.Expr)
+		if err != nil {
+			return nil, err
+		}
+		if v.Op == tree.UNARY_MINUS {
+			switch iival := ival.(type) {
+			case float64:
+				value = -1 * iival
+			case int64:
+				value = -1 * iival
+			default:
+				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
+			}
+		}
+	case *tree.UnresolvedName:
+		return v.Parts[0], nil
+	default:
+		return nil, errorComplicateExprIsNotSupported
+	}
+	return value, nil
 }

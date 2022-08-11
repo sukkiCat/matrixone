@@ -1,4 +1,8 @@
 <div class="column" align="middle">
+  <p align="center">
+   <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
+  </p>
+  </a>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
   </a>
@@ -10,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.io/0.3.0/MatrixOne/Release-Notes/v0.3.0/">
-   <img src="https://img.shields.io/badge/Release-v0.3.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.io/0.5.0/MatrixOne/Release-Notes/v0.5.0/">
+   <img src="https://img.shields.io/badge/Release-v0.5.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.io/0.3.0/">
+  <a href="https://docs.matrixorigin.io/0.5.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -61,17 +65,20 @@ Contents
 
 MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that supports transactional, analytical, and streaming workloads with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogeneous infrastructures.
 
+<p align="center">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+</p>
 
-##  🎯 <a id="key-features">Key Features</a> 
+##  🎯 <a id="key-features">Key Features</a>
 ### 💥 **Hyper-converged Engine**
 
 <details>
-  <summary><b><font size=4>Monolithic Engine</b></font></summary> 
+  <summary><b><font size=4>Monolithic Engine</b></font></summary>
           A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.
 </details>
 
 <details>
-  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary> 
+  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary>
                With the built-in streaming engine, MatrixOne supports in-database streaming processing by groundbreaking incremental materialized view maintenance.
 </details>
 
@@ -79,35 +86,35 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 ### ☁️ **Cloud & Edge Native**
 
 <details>
-  <summary><b><font size=4>Real Infrastructure Agnostic</b></font></summary> 
+  <summary><b><font size=4>Real Infrastructure Agnostic</b></font></summary>
                MatrixOne supports seemless workload migration and bursting among different locations and infrastructures.
 </details>
 
 <details>
-  <summary><b><font size=4>Multi-site Active/Active</b></font></summary> 
+  <summary><b><font size=4>Multi-site Active/Active</b></font></summary>
                     MatrixOne provides industry-leading latency control with optimized consistency protocol.
 </details>
 
 ### 🚀 **Extreme Performance**
 
 <details>
-  <summary><b><font size=4>High Performance</b></font></summary> 
+  <summary><b><font size=4>High Performance</b></font></summary>
      Accelerated queries supported by patented vectorized execution as well as optimal computation push down strategies through factorization techniques.
 </details>
 
 <details>
-  <summary><b><font size=4>Strong Consistency</b></font></summary> 
+  <summary><b><font size=4>Strong Consistency</b></font></summary>
      MatrixOne introduces a global, high-performance distributed transaction protocol across storage engines.
 </details>
 
 <details>
-  <summary><b><font size=4>High Scalability</b></font></summary> 
+  <summary><b><font size=4>High Scalability</b></font></summary>
      Seamless and non-disruptive scaling by disaggregated storage and compute.   
 </details>
 
 ## 💎 **<a id="user-values">User Values</a>**
 <details>
-  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary> 
+  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary>
      To solve the problem of high and unpredictable cost of database selection process, management and maintenance due to database overabundance, MatrixOne all-in-one architecture will significantly simplify database management and maintenance, single database can serve multiple data applications.
 </details>
 <details>
@@ -137,10 +144,10 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 ## 🔎 <a id="architecture">Architecture</a>
 MatrixOne's architecture is as below:   
 <p align="center">
-  <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.3.0/MatrixOne/Overview/matrixone-architecture/) and [MatrixOne Tech Design](https://docs.matrixorigin.io/0.3.0/MatrixOne/Overview/MatrixOne-Tech-Design/matrixone-techdesign/).
+For more details, you can checkout [MatrixOne Architecture](https://docs.matrixorigin.io/0.5.0/MatrixOne/Overview/matrixone-architecture/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
@@ -148,15 +155,29 @@ For more details, you can checkout [MatrixOne Architecture](https://docs.matrixo
 
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.3.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
 1. Install Go (version 1.18 is required).
-  
-2. Get the MatrixOne code:
+
+2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
+
+- *Option 1*: Get the MatrixOne(Preview Version) code
+
+The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
+```
+
+- *Option 2*: Get the MatrixOne(Stable Version) code
+
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.0** first.
+
+```
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ git checkout 0.5.0
 $ cd matrixone
 ```
 
@@ -184,15 +205,25 @@ $ docker --version
 ```
 
 2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
-   
+
+It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
+
+- Latest Image
+
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+
+- 0.5.0 Version Image
+
+```
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.0
 ```
 
 ### 🌟 Connecting to MatrixOne server
 
 1. Install MySQL client.
-   
+
    MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
 2. Connect to MatrixOne server:
@@ -200,7 +231,7 @@ $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
-   The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
+   The connection string is the same format as MySQL accepts. You need to provide a user name and a password.
 
    Use the built-in test account for example:
 
@@ -212,7 +243,7 @@ $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Now, MatrixOne only supports the TCP listener. 
+Now, MatrixOne only supports the TCP listener.
 
 
 
@@ -220,7 +251,7 @@ Now, MatrixOne only supports the TCP listener.
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.io/0.3.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow. 
+ See [Contribution Guide](https://docs.matrixorigin.io/0.5.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 
@@ -249,13 +280,6 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/sukki37">
-            <img src="https://avatars.githubusercontent.com/u/77312370?v=4" width="30;" alt="sukki37"/>
-            <br />
-            <sub><b>Maomao</b></sub>
-        </a>
-    </td>
-    <td align="center">
         <a href="https://github.com/aunjgr">
             <img src="https://avatars.githubusercontent.com/u/523063?v=4" width="30;" alt="aunjgr"/>
             <br />
@@ -268,8 +292,22 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Dengn</b></sub>
         </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/sukki37">
+            <img src="https://avatars.githubusercontent.com/u/77312370?v=4" width="30;" alt="sukki37"/>
+            <br />
+            <sub><b>Maomao</b></sub>
+        </a>
     </td></tr>
 <tr>
+    <td align="center">
+        <a href="https://github.com/lni">
+            <img src="https://avatars.githubusercontent.com/u/30930154?v=4" width="30;" alt="lni"/>
+            <br />
+            <sub><b>Lni</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/LeftHandCold">
             <img src="https://avatars.githubusercontent.com/u/14086886?v=4" width="30;" alt="LeftHandCold"/>
@@ -278,10 +316,10 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/broccoliSpicy">
-            <img src="https://avatars.githubusercontent.com/u/93440049?v=4" width="30;" alt="broccoliSpicy"/>
+        <a href="https://github.com/iamlinjunhong">
+            <img src="https://avatars.githubusercontent.com/u/49111204?v=4" width="30;" alt="iamlinjunhong"/>
             <br />
-            <sub><b>BroccoliSpicy</b></sub>
+            <sub><b>Iamlinjunhong</b></sub>
         </a>
     </td>
     <td align="center">
@@ -292,28 +330,6 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/jiangxinmeng1">
-            <img src="https://avatars.githubusercontent.com/u/51114574?v=4" width="30;" alt="jiangxinmeng1"/>
-            <br />
-            <sub><b>Jiangxinmeng1</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/zzl200012">
-            <img src="https://avatars.githubusercontent.com/u/57308069?v=4" width="30;" alt="zzl200012"/>
-            <br />
-            <sub><b>Kutori</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/iamlinjunhong">
-            <img src="https://avatars.githubusercontent.com/u/49111204?v=4" width="30;" alt="iamlinjunhong"/>
-            <br />
-            <sub><b>Iamlinjunhong</b></sub>
-        </a>
-    </td></tr>
-<tr>
-    <td align="center">
         <a href="https://github.com/ouyuanning">
             <img src="https://avatars.githubusercontent.com/u/45346669?v=4" width="30;" alt="ouyuanning"/>
             <br />
@@ -321,17 +337,25 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/lignay">
-            <img src="https://avatars.githubusercontent.com/u/58507761?v=4" width="30;" alt="lignay"/>
+        <a href="https://github.com/zhangxu19830126">
+            <img src="https://avatars.githubusercontent.com/u/2995754?v=4" width="30;" alt="zhangxu19830126"/>
             <br />
-            <sub><b>Matthew</b></sub>
+            <sub><b>Fagongzi</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/broccoliSpicy">
+            <img src="https://avatars.githubusercontent.com/u/93440049?v=4" width="30;" alt="broccoliSpicy"/>
+            <br />
+            <sub><b>BroccoliSpicy</b></sub>
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/JinHai-CN">
-            <img src="https://avatars.githubusercontent.com/u/33142505?v=4" width="30;" alt="JinHai-CN"/>
+        <a href="https://github.com/jiangxinmeng1">
+            <img src="https://avatars.githubusercontent.com/u/51114574?v=4" width="30;" alt="jiangxinmeng1"/>
             <br />
-            <sub><b>Jin Hai</b></sub>
+            <sub><b>Jiangxinmeng1</b></sub>
         </a>
     </td>
     <td align="center">
@@ -339,6 +363,13 @@ Contributions to MatrixOne are welcome from everyone.
             <img src="https://avatars.githubusercontent.com/u/32733096?v=4" width="30;" alt="jianwan0214"/>
             <br />
             <sub><b>Jianwan0214</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/zzl200012">
+            <img src="https://avatars.githubusercontent.com/u/57308069?v=4" width="30;" alt="zzl200012"/>
+            <br />
+            <sub><b>Kutori</b></sub>
         </a>
     </td>
     <td align="center">
@@ -357,31 +388,24 @@ Contributions to MatrixOne are welcome from everyone.
     </td></tr>
 <tr>
     <td align="center">
+        <a href="https://github.com/JinHai-CN">
+            <img src="https://avatars.githubusercontent.com/u/33142505?v=4" width="30;" alt="JinHai-CN"/>
+            <br />
+            <sub><b>Jin Hai</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lignay">
+            <img src="https://avatars.githubusercontent.com/u/58507761?v=4" width="30;" alt="lignay"/>
+            <br />
+            <sub><b>Matthew</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/qingxinhome">
             <img src="https://avatars.githubusercontent.com/u/70939751?v=4" width="30;" alt="qingxinhome"/>
             <br />
             <sub><b>Qingxinhome</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/wanhanbo">
-            <img src="https://avatars.githubusercontent.com/u/97089788?v=4" width="30;" alt="wanhanbo"/>
-            <br />
-            <sub><b>Wanhanbo</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/lni">
-            <img src="https://avatars.githubusercontent.com/u/30930154?v=4" width="30;" alt="lni"/>
-            <br />
-            <sub><b>Lni</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/cnutshell">
-            <img src="https://avatars.githubusercontent.com/u/20291742?v=4" width="30;" alt="cnutshell"/>
-            <br />
-            <sub><b>Cui Guoke</b></sub>
         </a>
     </td>
     <td align="center">
@@ -392,39 +416,32 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/wanglei4687">
-            <img src="https://avatars.githubusercontent.com/u/74483764?v=4" width="30;" alt="wanglei4687"/>
+        <a href="https://github.com/wanhanbo">
+            <img src="https://avatars.githubusercontent.com/u/97089788?v=4" width="30;" alt="wanhanbo"/>
             <br />
-            <sub><b>Wanglei</b></sub>
+            <sub><b>Wanhanbo</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/cnutshell">
+            <img src="https://avatars.githubusercontent.com/u/20291742?v=4" width="30;" alt="cnutshell"/>
+            <br />
+            <sub><b>Cui Guoke</b></sub>
         </a>
     </td></tr>
 <tr>
+    <td align="center">
+        <a href="https://github.com/lacrimosaprinz">
+            <img src="https://avatars.githubusercontent.com/u/43231571?v=4" width="30;" alt="lacrimosaprinz"/>
+            <br />
+            <sub><b>Prinz</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/dongdongyang33">
             <img src="https://avatars.githubusercontent.com/u/47596332?v=4" width="30;" alt="dongdongyang33"/>
             <br />
             <sub><b>Dongdongyang</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/aptend">
-            <img src="https://avatars.githubusercontent.com/u/49832303?v=4" width="30;" alt="aptend"/>
-            <br />
-            <sub><b>Aptend</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/zhangxu19830126">
-            <img src="https://avatars.githubusercontent.com/u/2995754?v=4" width="30;" alt="zhangxu19830126"/>
-            <br />
-            <sub><b>Fagongzi</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/JackTan25">
-            <img src="https://avatars.githubusercontent.com/u/60096118?v=4" width="30;" alt="JackTan25"/>
-            <br />
-            <sub><b>Boyu Tan</b></sub>
         </a>
     </td>
     <td align="center">
@@ -435,13 +452,48 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/JackTan25">
+            <img src="https://avatars.githubusercontent.com/u/60096118?v=4" width="30;" alt="JackTan25"/>
+            <br />
+            <sub><b>Boyu Tan</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/wanglei4687">
+            <img src="https://avatars.githubusercontent.com/u/74483764?v=4" width="30;" alt="wanglei4687"/>
+            <br />
+            <sub><b>Wanglei</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/aptend">
+            <img src="https://avatars.githubusercontent.com/u/49832303?v=4" width="30;" alt="aptend"/>
+            <br />
+            <sub><b>Aptend</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
         <a href="https://github.com/yingfeng">
             <img src="https://avatars.githubusercontent.com/u/7248?v=4" width="30;" alt="yingfeng"/>
             <br />
             <sub><b>Yingfeng</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
+    <td align="center">
+        <a href="https://github.com/guguducken">
+            <img src="https://avatars.githubusercontent.com/u/22561920?v=4" width="30;" alt="guguducken"/>
+            <br />
+            <sub><b>Brown</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/domingozhang">
+            <img src="https://avatars.githubusercontent.com/u/88298673?v=4" width="30;" alt="domingozhang"/>
+            <br />
+            <sub><b>DomingoZhang</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/noneback">
             <img src="https://avatars.githubusercontent.com/u/46670806?v=4" width="30;" alt="noneback"/>
@@ -456,6 +508,14 @@ Contributions to MatrixOne are welcome from everyone.
             <sub><b>Otter</b></sub>
         </a>
     </td>
+    <td align="center">
+        <a href="https://github.com/richelleguice">
+            <img src="https://avatars.githubusercontent.com/u/84093582?v=4" width="30;" alt="richelleguice"/>
+            <br />
+            <sub><b>Richelle Guice</b></sub>
+        </a>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/MatrixAdventurer">
             <img src="https://avatars.githubusercontent.com/u/85048713?v=4" width="30;" alt="MatrixAdventurer"/>
@@ -478,18 +538,32 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/aressu1985">
+            <img src="https://avatars.githubusercontent.com/u/47846308?v=4" width="30;" alt="aressu1985"/>
+            <br />
+            <sub><b>aressu1985</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/e11jah">
             <img src="https://avatars.githubusercontent.com/u/30852919?v=4" width="30;" alt="e11jah"/>
             <br />
             <sub><b>E11jah</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/whileskies">
             <img src="https://avatars.githubusercontent.com/u/20637002?v=4" width="30;" alt="whileskies"/>
             <br />
             <sub><b>Whileskies</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/aylei">
+            <img src="https://avatars.githubusercontent.com/u/18556593?v=4" width="30;" alt="aylei"/>
+            <br />
+            <sub><b>Aylei</b></sub>
         </a>
     </td>
     <td align="center">
@@ -507,32 +581,10 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/richelleguice">
-            <img src="https://avatars.githubusercontent.com/u/84093582?v=4" width="30;" alt="richelleguice"/>
-            <br />
-            <sub><b>Richelle Guice</b></sub>
-        </a>
-    </td>
-    <td align="center">
         <a href="https://github.com/Y7n05h">
             <img src="https://avatars.githubusercontent.com/u/69407218?v=4" width="30;" alt="Y7n05h"/>
             <br />
             <sub><b>Y7n05h</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/lacrimosaprinz">
-            <img src="https://avatars.githubusercontent.com/u/43231571?v=4" width="30;" alt="lacrimosaprinz"/>
-            <br />
-            <sub><b>Prinz</b></sub>
-        </a>
-    </td></tr>
-<tr>
-    <td align="center">
-        <a href="https://github.com/aylei">
-            <img src="https://avatars.githubusercontent.com/u/18556593?v=4" width="30;" alt="aylei"/>
-            <br />
-            <sub><b>Aylei</b></sub>
         </a>
     </td>
     <td align="center">
@@ -548,14 +600,8 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Charlie17Li</b></sub>
         </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/domingozhang">
-            <img src="https://avatars.githubusercontent.com/u/88298673?v=4" width="30;" alt="domingozhang"/>
-            <br />
-            <sub><b>DomingoZhang</b></sub>
-        </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/ericsyh">
             <img src="https://avatars.githubusercontent.com/u/10498732?v=4" width="30;" alt="ericsyh"/>
@@ -569,13 +615,19 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Fungx</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/JasonPeng1310">
             <img src="https://avatars.githubusercontent.com/u/46837930?v=4" width="30;" alt="JasonPeng1310"/>
             <br />
             <sub><b>Jason Peng</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jensenojs">
+            <img src="https://avatars.githubusercontent.com/u/56761542?v=4" width="30;" alt="jensenojs"/>
+            <br />
+            <sub><b>Jensen</b></sub>
         </a>
     </td>
     <td align="center">
@@ -591,7 +643,8 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>RinChanNOW!</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/chaixuqing">
             <img src="https://avatars.githubusercontent.com/u/41991639?v=4" width="30;" alt="chaixuqing"/>
@@ -612,8 +665,7 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>ZheNing Hu</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/ajian2002">
             <img src="https://avatars.githubusercontent.com/u/37119488?v=4" width="30;" alt="ajian2002"/>
@@ -634,7 +686,8 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Coderzc</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/florashi181">
             <img src="https://avatars.githubusercontent.com/u/87641339?v=4" width="30;" alt="florashi181"/>
@@ -655,8 +708,14 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Jinfu</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lokax">
+            <img src="https://avatars.githubusercontent.com/u/57343445?v=4" width="30;" alt="lokax"/>
+            <br />
+            <sub><b>Lokax</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/lyfer233">
             <img src="https://avatars.githubusercontent.com/u/24930135?v=4" width="30;" alt="lyfer233"/>
@@ -664,6 +723,14 @@ Contributions to MatrixOne are welcome from everyone.
             <sub><b>Lyfer233</b></sub>
         </a>
     </td>
+    <td align="center">
+        <a href="https://github.com/mklzl">
+            <img src="https://avatars.githubusercontent.com/u/36362816?v=4" width="30;" alt="mklzl"/>
+            <br />
+            <sub><b>mklzl</b></sub>
+        </a>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/sundy-li">
             <img src="https://avatars.githubusercontent.com/u/3325189?v=4" width="30;" alt="sundy-li"/>
@@ -698,15 +765,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Xiyuedong</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/yclchuxue">
             <img src="https://avatars.githubusercontent.com/u/75575291?v=4" width="30;" alt="yclchuxue"/>
             <br />
             <sub><b>Yclchuxue</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/ZtXavier">
             <img src="https://avatars.githubusercontent.com/u/75614614?v=4" width="30;" alt="ZtXavier"/>
@@ -721,5 +788,3 @@ Contributions to MatrixOne are welcome from everyone.
 
 ## <a id="license">License</a>
 MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).
-
-

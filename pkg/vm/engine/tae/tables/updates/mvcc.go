@@ -16,11 +16,14 @@ package updates
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -29,11 +32,13 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
+	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
-	maxVisible      uint64
+	maxVisible      atomic.Value
 	appends         []*AppendNode
 	changes         uint32
-	deletesListener func(uint64, common.RowGen, uint64) error
+	deletesListener func(uint64, common.RowGen, types.TS) error
+	appendListener  func(txnif.AppendNode) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -54,11 +59,19 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	return node
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
+func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
+	n.appendListener = l
+}
+
+func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
+	return n.appendListener
+}
+
+func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, uint64) error {
+func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, types.TS) error {
 	return n.deletesListener
 }
 
@@ -73,6 +86,24 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	txn := node.txn
 	node.RUnlock()
 	return txn != nil
+}
+
+func (n *MVCCHandle) AddHoles(start, end int) {
+	if n.holes != nil {
+		n.holes = roaring.New()
+	}
+	n.holes.AddRange(uint64(start), uint64(end))
+}
+
+func (n *MVCCHandle) HasHole() bool {
+	return n.holes != nil && !n.holes.IsEmpty()
+}
+
+func (n *MVCCHandle) HoleCnt() int {
+	if !n.HasHole() {
+		return 0
+	}
+	return int(n.holes.GetCardinality())
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
@@ -95,12 +126,13 @@ func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
 }
 
-func (n *MVCCHandle) SetMaxVisible(ts uint64) {
-	atomic.StoreUint64(&n.maxVisible, ts)
+func (n *MVCCHandle) SetMaxVisible(ts types.TS) {
+	n.maxVisible.Store(ts)
 }
 
-func (n *MVCCHandle) LoadMaxVisible() uint64 {
-	return atomic.LoadUint64(&n.maxVisible)
+func (n *MVCCHandle) LoadMaxVisible() types.TS {
+	ts := n.maxVisible.Load().(types.TS)
+	return ts
 }
 
 func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
@@ -117,6 +149,9 @@ func (n *MVCCHandle) StringLocked() string {
 		}
 		chain.RUnlock()
 	}
+	for _, insert := range n.appends {
+		s = fmt.Sprintf("%s\n%s", s, insert.GeneralString())
+	}
 	return s
 }
 
@@ -126,12 +161,12 @@ func (n *MVCCHandle) GetColumnExclusiveLock(idx uint16) sync.Locker {
 	return col.RWMutex
 }
 
-func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts uint64) error {
+func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
 	return n.deletes.PrepareRangeDelete(start, end, ts)
 }
 
-func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn) txnif.DeleteNode {
-	return n.deletes.AddNodeLocked(txn)
+func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
+	return n.deletes.AddNodeLocked(txn, deleteType)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
@@ -155,7 +190,7 @@ func (n *MVCCHandle) PrepareUpdate(row uint32, colIdx uint16, update txnif.Updat
 	return chain.PrepareUpdate(row, update)
 }
 
-func (n *MVCCHandle) CheckNotUpdated(start, end uint32, ts uint64) (err error) {
+func (n *MVCCHandle) CheckNotUpdated(start, end uint32, ts types.TS) (err error) {
 	for _, chain := range n.columns {
 		for i := start; i <= end; i++ {
 			if err = chain.view.PrepapreInsert(i, ts); err != nil {
@@ -178,18 +213,47 @@ func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	n.appends = append(n.appends, an)
 	n.TrySetMaxVisible(an.commitTs)
 }
-func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
-	if ts > n.maxVisible {
-		n.maxVisible = ts
+func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
+	if ts.Greater(n.maxVisible.Load().(types.TS)) {
+		n.maxVisible.Store(ts)
 	}
 }
-func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
-	an := NewAppendNode(txn, maxRow, n)
-	n.appends = append(n.appends, an)
-	return an
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	startRow uint32,
+	maxRow uint32) (an *AppendNode, created bool) {
+	if len(n.appends) == 0 {
+		an = NewAppendNode(txn, startRow, maxRow, n)
+		n.appends = append(n.appends, an)
+		created = true
+	} else {
+		an = n.appends[len(n.appends)-1]
+		an.RLock()
+		nTxn := an.txn
+		an.RUnlock()
+		if nTxn != txn {
+			an = NewAppendNode(txn, startRow, maxRow, n)
+			n.appends = append(n.appends, an)
+			created = true
+		} else {
+			created = false
+			an.SetMaxRow(maxRow)
+		}
+	}
+	return
 }
 
-func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
+func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
+	for i := len(n.appends) - 1; i >= 0; i-- {
+		if n.appends[i].maxRow == node.maxRow {
+			n.appends = append(n.appends[:i], n.appends[i+1:]...)
+		} else if n.appends[i].maxRow < node.maxRow {
+			break
+		}
+	}
+}
+
+func (n *MVCCHandle) IsVisibleLocked(row uint32, ts types.TS) (bool, error) {
 	maxRow, visible, err := n.GetMaxVisibleRowLocked(ts)
 	if !visible || err != nil {
 		return visible, err
@@ -198,15 +262,15 @@ func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
 	return visible, err
 }
 
-func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64, rwlocker *sync.RWMutex) (bool, error) {
+func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWMutex) (bool, error) {
 	return n.deletes.IsDeleted(row, ts, rwlocker)
 }
 
-func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (indexes []*wal.Index, err error) {
+func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
 	if len(n.appends) == 0 {
 		return
 	}
-	startOffset, _, startVisible, err := n.getMaxVisibleRowLocked(startTs - 1)
+	startOffset, _, startVisible, err := n.getMaxVisibleRowLocked(startTs.Prev())
 	if err != nil {
 		return
 	}
@@ -228,12 +292,12 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (index
 	return
 }
 
-func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool, err error) {
+func (n *MVCCHandle) GetMaxVisibleRowLocked(ts types.TS) (row uint32, visible bool, err error) {
 	_, row, visible, err = n.getMaxVisibleRowLocked(ts)
 	return
 }
 
-//for replay
+// GetTotalRow is only for replay
 func (n *MVCCHandle) GetTotalRow() uint32 {
 	if len(n.appends) == 0 {
 		return 0
@@ -242,7 +306,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return n.appends[len(n.appends)-1].maxRow - delets
 }
 
-func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error) {
+func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, error) {
 	if len(n.appends) == 0 {
 		return 0, 0, false, nil
 	}
@@ -250,42 +314,44 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error
 	lastAppend := n.appends[len(n.appends)-1]
 
 	// 1. Last append node is in the window and it was already committed
-	if ts > lastAppend.GetCommitTS() && maxVisible >= lastAppend.GetCommitTS() {
+	if ts.Greater(lastAppend.GetCommitTS()) && maxVisible.GreaterEq(lastAppend.GetCommitTS()) {
 		return len(n.appends) - 1, lastAppend.GetMaxRow(), true, nil
 	}
 	start, end := 0, len(n.appends)-1
 	var mid int
 	for start <= end {
 		mid = (start + end) / 2
-		if n.appends[mid].GetCommitTS() < ts {
+		if n.appends[mid].GetCommitTS().Less(ts) {
 			start = mid + 1
-		} else if n.appends[mid].GetCommitTS() > ts {
+		} else if n.appends[mid].GetCommitTS().Greater(ts) {
 			end = mid - 1
 		} else {
 			break
 		}
 	}
-	if mid == 0 && n.appends[mid].GetCommitTS() > ts {
+	if mid == 0 && n.appends[mid].GetCommitTS().Greater(ts) {
 		// 2. The first node is found and it was committed after ts
 		return 0, 0, false, nil
-	} else if mid != 0 && n.appends[mid].GetCommitTS() > ts {
+	} else if mid != 0 && n.appends[mid].GetCommitTS().Greater(ts) {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
 	}
 	var err error
 	node := n.appends[mid]
-	if node.GetCommitTS() > n.LoadMaxVisible() {
+	if node.GetCommitTS().Greater(n.LoadMaxVisible()) {
 		node.RLock()
 		txn := node.txn
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
-		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+		if txn != nil && node.GetCommitTS().Greater(n.LoadMaxVisible()) {
+			node.mvcc.RUnlock()
 			// Append node should not be rollbacked because apply append is the last step of prepare commit
 			state := txn.GetTxnState(true)
+			node.mvcc.RLock()
 			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			if state == txnif.TxnStateUnknown {
-				err = txnif.TxnInternalErr
-			} else if state == txnif.TxnStateRollbacked {
+				err = txnif.ErrTxnInternal
+			} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStateCommitting {
 				panic("append node shoul not be rollbacked")
 			}
 		}

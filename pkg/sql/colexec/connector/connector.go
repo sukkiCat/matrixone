@@ -17,40 +17,37 @@ package connector
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
+func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
-	reg := n.Reg
-	bat := proc.Reg.InputBatch
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	ap := arg.(*Argument)
+	reg := ap.Reg
+	bat := proc.InputBatch()
 	if bat == nil {
 		select {
 		case <-reg.Ctx.Done():
-			process.FreeRegisters(proc)
 			return true, nil
 		case reg.Ch <- bat:
-			return false, nil
+			return true, nil
 		}
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
-	vecs := n.vecs[:0]
+	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
-			vec, err := vector.Dup(bat.Vecs[i], proc.Mp)
+			vec, err := vector.Dup(bat.Vecs[i], proc.GetMheap())
 			if err != nil {
 				return false, err
 			}
@@ -63,17 +60,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vecs = vecs[1:]
 		}
 	}
-	size := mheap.Size(proc.Mp)
 	select {
 	case <-reg.Ctx.Done():
-		batch.Clean(bat, proc.Mp)
-		process.FreeRegisters(proc)
+		bat.Clean(proc.GetMheap())
 		return true, nil
 	case reg.Ch <- bat:
-		if err := n.Mmu.Alloc(size); err != nil {
-			return false, err
-		}
-		proc.Mp.Gm.Free(size)
 		return false, nil
 	}
 }

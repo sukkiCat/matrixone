@@ -32,42 +32,81 @@ func New(m *mheap.Mheap) *Process {
 	}
 }
 
+func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
+	proc := NewFromProc(p, ctx, regNumber)
+	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
+	copy(proc.AnalInfos, anals)
+	return proc
+}
+
 // NewFromProc create a new Process based on another process.
-func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
-	proc := &Process{Mp: m}
-	ctx, cancel := context.WithCancel(context.Background())
+func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
+	proc := new(Process)
+	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
+	proc.Mp = p.Mp
 	proc.Lim = p.Lim
-	proc.UnixTime = p.UnixTime
 	proc.Snapshot = p.Snapshot
+	proc.AnalInfos = p.AnalInfos
+	proc.SessionInfo = p.SessionInfo
+
 	// reg and cancel
 	proc.Cancel = cancel
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
 	for i := 0; i < regNumber; i++ {
 		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: ctx,
+			Ctx: newctx,
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
 	return proc
 }
 
-func GetSels(proc *Process) []int64 {
-	if len(proc.Reg.Ss) == 0 {
-		return make([]int64, 0, 16)
+func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (wreg *WaitRegister) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
+func (proc *Process) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (proc *Process) UnmarshalBinary(_ []byte) error {
+	return nil
+}
+
+func (proc *Process) QueryId() string {
+	return proc.Id
+}
+
+func (proc *Process) SetQueryId(id string) {
+	proc.Id = id
+}
+
+func (proc *Process) GetMheap() *mheap.Mheap {
+	return proc.Mp
+}
+
+func (proc *Process) OperatorOutofMemory(size int64) bool {
+	return proc.Lim.Size < size
+}
+
+func (proc *Process) SetInputBatch(bat *batch.Batch) {
+	proc.Reg.InputBatch = bat
+}
+
+func (proc *Process) InputBatch() *batch.Batch {
+	return proc.Reg.InputBatch
+}
+
+func (proc *Process) GetAnalyze(idx int) Analyze {
+	if idx >= len(proc.AnalInfos) {
+		return &analyze{analInfo: nil}
 	}
-	sels := proc.Reg.Ss[0]
-	proc.Reg.Ss = proc.Reg.Ss[1:]
-	return sels[:0]
-}
-
-func PutSels(sels []int64, proc *Process) {
-	proc.Reg.Ss = append(proc.Reg.Ss, sels)
-}
-
-func (proc *Process) GetBoolTyp(typ types.Type) (typ2 types.Type) {
-	typ.Oid = types.T_bool
-	return typ
+	return &analyze{analInfo: proc.AnalInfos[idx]}
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
@@ -81,45 +120,35 @@ func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, er
 }
 
 func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
-	return vector.NewConst(typ)
+	return vector.NewConst(typ, 1)
 }
 
 func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
-	vec := vector.NewConst(typ)
+	vec := vector.NewConst(typ, 1)
 	nulls.Add(vec.Nsp, 0)
 	return vec
 }
 
-func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
-	for i, vec := range proc.Reg.Vecs {
-		if int64(cap(vec.Data)) >= size {
-			vec.Ref = 0
-			vec.Or = false
-			vec.Typ = typ
-			nulls.Reset(vec.Nsp)
-			vec.Data = vec.Data[:size]
-			proc.Reg.Vecs[i] = proc.Reg.Vecs[len(proc.Reg.Vecs)-1]
-			proc.Reg.Vecs = proc.Reg.Vecs[:len(proc.Reg.Vecs)-1]
-			return vec, nil
-		}
-	}
-	data, err := mheap.Alloc(proc.Mp, size)
-	if err != nil {
-		return nil, err
-	}
-	vec := vector.New(typ)
-	vec.Data = data
-	return vec, nil
+func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vector {
+	vec := vector.NewConstNull(typ, cnt)
+	nulls.Add(vec.Nsp, 0)
+	return vec
 }
 
-func Put(proc *Process, vec *vector.Vector) {
-	proc.Reg.Vecs = append(proc.Reg.Vecs, vec)
+func (proc *Process) AllocBoolScalarVector(v bool) *vector.Vector {
+	typ := types.T_bool.ToType()
+	vec := proc.AllocScalarVector(typ)
+	bvec := make([]bool, 1)
+	bvec[0] = v
+	vec.Col = bvec
+	return vec
 }
 
-func FreeRegisters(proc *Process) {
-	for _, vec := range proc.Reg.Vecs {
-		vec.Ref = 0
-		vector.Free(vec, proc.Mp)
-	}
-	proc.Reg.Vecs = proc.Reg.Vecs[:0]
+func (proc *Process) AllocInt64ScalarVector(v int64) *vector.Vector {
+	typ := types.T_int64.ToType()
+	vec := proc.AllocScalarVector(typ)
+	ivec := make([]int64, 1)
+	ivec[0] = v
+	vec.Col = ivec
+	return vec
 }
